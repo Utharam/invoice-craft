@@ -5,7 +5,9 @@
   "scripts": {
     "build": "node build.js",
     "prestart": "node build.js",
-    "start": "npx -y serve ."
+    "start": "npx -y serve .",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
   },
   "keywords": [
     "invoice",

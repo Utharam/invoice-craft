@@ -1,0 +1,10 @@
+# Cloudflare Workers / Pages Static Assets ignore file
+node_modules/
+.git/
+.github/
+package.json
+package-lock.json
+build.js
+start.bat
+scratch/
+*.log
