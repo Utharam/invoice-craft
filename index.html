@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InvoiceCraft - Browser-Based Invoice Generator (100% Client-Side & IndexedDB)</title>
+  
+  <!-- Curated Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Favicon: Standard Utharam squircle badge -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23059669'/%3E%3Ctext x='16' y='22' font-family='monospace' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EU%3C/text%3E%3C/svg%3E">
+
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Top App Navigation -->
+  <header class="app-navbar">
+    <div class="brand-section">
+      <button class="btn btn-secondary btn-sm btn-icon" id="btn-toggle-sidebar" title="Collapse / Expand Sidebar (Ctrl+B)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+      </button>
+      <div class="brand-logo-badge">IC</div>
+      <div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="brand-title">InvoiceCraft</span>
+          <a href="https://utharam.in/" target="_blank" rel="noopener noreferrer" class="badge-utharam" title="Utharam — Simple Solutions for Complex Problems">
+            <span class="utharam-dot"></span>
+            <span>by Utharam</span>
+          </a>
+        </div>
+      </div>
+      <button class="btn-privacy-badge" id="btn-open-privacy-modal" title="Click to read why your data is private, local storage risks, and backup recommendations">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <path d="m9 12 2 2 4-4"/>
+        </svg>
+        <span>Your Data is Private</span>
+        <span class="privacy-read-chip">Read Notice</span>
+      </button>
+    </div>
+
+    <div class="nav-actions">
+      <button class="btn btn-secondary btn-sm" id="btn-new-invoice" title="Start a fresh invoice">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        New
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-guide-modal" title="First-time user guide & documentation">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        Guide
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-companies-modal" title="Manage your saved company profiles">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9h1M9 13h1M9 17h1M15 13h1M15 17h1"></path></svg>
+        Companies (<span id="saved-companies-count">0</span>)
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-invoices-modal" title="View saved invoices in IndexedDB">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+        Saved (<span id="saved-invoices-count">0</span>)
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-clients-modal" title="Address book of clients">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        Clients
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-open-backup-modal" title="Export or Import database JSON">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        Backup
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btn-save-invoice" title="Save this invoice to history">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+        Save
+      </button>
+      <button class="btn btn-primary btn-sm" id="btn-print-pdf" title="Print or Save as Vector PDF (Ctrl+P)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+        Print / Save PDF
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="app-workspace">
+    <!-- Left Sidebar: Controls & Inputs -->
+    <aside class="editor-sidebar" id="editor-sidebar">
+
+      <!-- Sticky Section Navigation Pills (Click to Expand / Click to Hide) -->
+      <nav class="sidebar-pills-bar" id="sidebar-pills-bar">
+        <button class="nav-pill active" data-target="sec-models" title="Click to open or close Document Type & Models">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+          <span>1. Type & Models</span>
+        </button>
+        <button class="nav-pill" data-target="sec-brand" title="Click to open or close Brand & Logo Studio">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="12 8 8 12 12 16 16 12 12 8"></polygon></svg>
+          <span>2. Brand</span>
+        </button>
+        <button class="nav-pill" data-target="sec-meta" title="Click to open or close Invoice Details">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path></svg>
+          <span>3. Details</span>
+        </button>
+        <button class="nav-pill" data-target="sec-parties" title="Click to open or close Parties (From & To)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+          <span>4. Parties</span>
+        </button>
+        <button class="nav-pill" data-target="sec-items" title="Click to open or close Line Items & Taxes">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line></svg>
+          <span>5. Items & Taxes</span>
+        </button>
+        <button class="nav-pill" data-target="sec-payment" title="Click to open or close Payment & Notes">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"></rect></svg>
+          <span>6. Payment</span>
+        </button>
+      </nav>
+
+      <!-- Collapsed State Helper (Shown when all sections are toggled closed) -->
+      <div class="sidebar-empty-state" id="sidebar-empty-state" style="display:none;">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+        <h4>Sections Collapsed</h4>
+        <p>Click on any of the horizontal pills above to open that section, or click on an open pill to hide it.</p>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:8px;">
+          <button class="btn-quick-open" data-target="sec-models">1. Type & Models</button>
+          <button class="btn-quick-open" data-target="sec-brand">2. Brand</button>
+          <button class="btn-quick-open" data-target="sec-meta">3. Details</button>
+          <button class="btn-quick-open" data-target="sec-parties">4. Parties</button>
+          <button class="btn-quick-open" data-target="sec-items">5. Items & Taxes</button>
+          <button class="btn-quick-open" data-target="sec-payment">6. Payment</button>
+        </div>
+      </div>
+
+      <!-- SECTION 1: TEMPLATE & STYLING -->
+      <section class="editor-section" id="sec-models">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+            1. Document Type & Visual Models
+          </span>
+        </div>
+
+        <!-- Document Type Selector (Clear intent right from step 1) -->
+        <div class="doc-creation-intro">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+            <label class="form-label" style="font-size:12px; font-weight:700; color:var(--text-main); margin-bottom:0; display:flex; align-items:center; gap:6px;">
+              <span>What are you creating?</span>
+              <span style="font-size:9.5px; background:#eff6ff; color:#2563eb; font-weight:700; padding:1px 6px; border-radius:4px; text-transform:uppercase;">Step 1</span>
+            </label>
+            <span id="doc-type-badge-summary" style="font-size:11px; font-weight:700; color:#2563eb; background:#eff6ff; padding:2px 8px; border-radius:12px;">INVOICE MODE</span>
+          </div>
+
+          <div class="doc-type-cards-grid" id="doc-type-cards-grid" role="radiogroup" aria-label="Document type">
+            <div class="doc-type-card active" data-type="invoice" role="radio" aria-checked="true" tabindex="0" aria-label="Tax Invoice">
+              <div class="doc-type-card-top">
+                <span class="doc-type-card-icon">🧾</span>
+                <span class="doc-type-card-badge">Official</span>
+              </div>
+              <div class="doc-type-card-title">Tax Invoice</div>
+              <div class="doc-type-card-desc">Standard billing with due dates & bank remittance instructions</div>
+            </div>
+
+            <div class="doc-type-card" data-type="quotation" role="radio" aria-checked="false" tabindex="0" aria-label="Quotation">
+              <div class="doc-type-card-top">
+                <span class="doc-type-card-icon">📋</span>
+                <span class="doc-type-card-badge">Proposal</span>
+              </div>
+              <div class="doc-type-card-title">Quotation</div>
+              <div class="doc-type-card-desc">Price quote with 30-day validity & signature approval line</div>
+            </div>
+
+            <div class="doc-type-card" data-type="estimate" role="radio" aria-checked="false" tabindex="0" aria-label="Cost Estimate">
+              <div class="doc-type-card-top">
+                <span class="doc-type-card-icon">📊</span>
+                <span class="doc-type-card-badge">Preliminary</span>
+              </div>
+              <div class="doc-type-card-title">Cost Estimate</div>
+              <div class="doc-type-card-desc">Project scope approximation with terms & work contingencies</div>
+            </div>
+
+            <div class="doc-type-card" data-type="proforma" role="radio" aria-checked="false" tabindex="0" aria-label="Proforma invoice">
+              <div class="doc-type-card-top">
+                <span class="doc-type-card-icon">📑</span>
+                <span class="doc-type-card-badge">Advance</span>
+              </div>
+              <div class="doc-type-card-title">Proforma</div>
+              <div class="doc-type-card-desc">Preliminary commercial declaration for advance deposits or customs</div>
+            </div>
+          </div>
+
+          <!-- Quick Convert Callout if Quotation/Estimate/Proforma is active -->
+          <div class="doc-type-hint-banner" id="doc-type-hint-banner" style="display:none;">
+            <span>⚡ <strong>Tip:</strong> Any Quotation, Estimate, or Proforma can be converted to an Invoice with 1 click at any time!</span>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-quick-convert-banner" style="font-size:11px; padding:3px 8px; margin-left:auto; white-space:nowrap;">Convert to Invoice</button>
+          </div>
+        </div>
+
+        <div style="margin:16px 0 10px; border-top:1px dashed var(--border-subtle); padding-top:12px;">
+          <label class="form-label" style="font-size:12px; font-weight:700; color:var(--text-main); margin-bottom:8px;">
+            Choose Visual Model (10 Bundled)
+          </label>
+        </div>
+        
+        <div class="templates-grid" id="templates-grid">
+          <!-- 10 models populated dynamically -->
+        </div>
+
+        <div class="style-controls-row">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="font-select">Typography</label>
+            <select class="form-select" id="font-select">
+              <option value="'Inter', sans-serif">Inter (Standard Modern)</option>
+              <option value="'Space Grotesk', sans-serif">Space Grotesk (Tech Sans)</option>
+              <option value="'Playfair Display', serif">Playfair Display (Editorial)</option>
+              <option value="'JetBrains Mono', monospace">JetBrains Mono (Code/Dev)</option>
+              <option value="'Outfit', sans-serif">Outfit (Clean Geometry)</option>
+              <option value="'Plus Jakarta Sans', sans-serif">Plus Jakarta Sans (Corporate)</option>
+              <option value="'Syne', sans-serif">Syne (Creative Avant-Garde)</option>
+              <option value="'Cinzel', serif">Cinzel (Formal & Legal)</option>
+              <option value="'DM Sans', sans-serif">DM Sans (Humanist)</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="accent-color-picker">Accent Color</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="color" id="accent-color-picker" value="#2563eb" style="width:36px; height:36px; border:none; border-radius:6px; cursor:pointer;">
+              <span id="accent-color-hex" style="font-size:12px; font-weight:600; color:#475569;">#2563eb</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="color-presets-row" id="color-presets">
+          <!-- Color chips -->
+          <div class="color-swatch active" data-color="#2563eb" style="background:#2563eb" title="Royal Blue"></div>
+          <div class="color-swatch" data-color="#059669" style="background:#059669" title="Emerald"></div>
+          <div class="color-swatch" data-color="#7c3aed" style="background:#7c3aed" title="Purple"></div>
+          <div class="color-swatch" data-color="#dc2626" style="background:#dc2626" title="Crimson"></div>
+          <div class="color-swatch" data-color="#d97706" style="background:#d97706" title="Amber"></div>
+          <div class="color-swatch" data-color="#334155" style="background:#334155" title="Slate"></div>
+          <div class="color-swatch" data-color="#e11d48" style="background:#e11d48" title="Rose"></div>
+          <div class="color-swatch" data-color="#0f172a" style="background:#0f172a" title="Obsidian Dark"></div>
+        </div>
+
+        <div class="section-nav-footer">
+          <button class="btn btn-secondary btn-sm btn-next-tab" data-next="sec-brand">Next: Brand & Logo &rarr;</button>
+        </div>
+      </section>
+
+      <!-- SECTION 2: LOGO & HEADER BRANDING -->
+      <section class="editor-section" id="sec-brand" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="12 8 8 12 12 16 16 12 12 8"></polygon></svg>
+            2. Header & Brand Lockup
+          </span>
+        </div>
+
+        <div class="logo-control-box">
+          <div class="logo-preview-thumb" id="logo-preview-thumb">
+            <span style="font-size:11px; color:#94a3b8;">No Logo</span>
+          </div>
+          <div class="logo-actions">
+            <button class="btn btn-primary btn-sm" id="btn-open-logo-studio">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              Open Logo Studio
+            </button>
+            <button class="btn btn-danger btn-sm" id="btn-remove-logo" style="display:none;">
+              Remove Logo
+            </button>
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="logo-width-slider">Logo Size (<span id="logo-width-val">180px</span>)</label>
+            <input type="range" id="logo-width-slider" min="60" max="450" value="180" class="form-input" style="padding:4px 0;">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Alignment</label>
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-secondary btn-sm active" id="btn-logo-left" style="flex:1;">Left</button>
+              <button class="btn btn-secondary btn-sm" id="btn-logo-center" style="flex:1;">Center</button>
+              <button class="btn btn-secondary btn-sm" id="btn-logo-right" style="flex:1;">Right</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:10px;">
+          <label class="form-label">Header Placement on Invoice</label>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-secondary btn-sm active" id="btn-layout-left" style="flex:1;">Left Logo</button>
+            <button class="btn btn-secondary btn-sm" id="btn-layout-center" style="flex:1;">Centered Brand</button>
+            <button class="btn btn-secondary btn-sm" id="btn-layout-right" style="flex:1;">Right Logo</button>
+          </div>
+        </div>
+
+        <div class="section-nav-footer">
+          <button class="btn btn-secondary btn-sm btn-next-tab" data-next="sec-meta">Next: Document Details &rarr;</button>
+        </div>
+      </section>
+
+      <!-- SECTION 3: DOCUMENT DETAILS & NUMBERING -->
+      <section class="editor-section" id="sec-meta" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+            <span id="section-meta-title">3. Document Details</span>
+          </span>
+          <button class="btn btn-primary btn-sm" id="btn-convert-quote" style="display:none;" title="Convert this Quotation into an Invoice with 1 click">
+            ⚡ Convert to Invoice
+          </button>
+        </div>
+
+        <!-- Active Document Context & Numbering Engine Toolbar -->
+        <div class="doc-context-toolbar" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Creating:</span>
+            <span class="doc-type-pill" id="doc-type-current-pill" style="font-size:11.5px; font-weight:700; color:#1d4ed8; background:#dbeafe; padding:2px 8px; border-radius:12px; display:inline-flex; align-items:center; gap:4px;">
+              <span id="doc-type-pill-icon">📄</span>
+              <span id="doc-type-pill-name">Tax Invoice</span>
+            </span>
+            <button type="button" class="btn-link" id="btn-change-doc-type" style="font-size:11px; color:#2563eb; background:none; border:none; padding:0; cursor:pointer; text-decoration:underline;">Change in Step 1</button>
+          </div>
+          <div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-open-numbering-modal" style="font-size:11px; padding:4px 9px; display:inline-flex; align-items:center; gap:5px;" title="Configure continuous invoice numbering engine or switch to manual entry">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path><circle cx="12" cy="12" r="4"></circle></svg>
+              <span id="numbering-badge-text">Numbering Engine</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="input-inv-title" id="label-doc-title">Document Title</label>
+            <input type="text" class="form-input" id="input-inv-title" value="INVOICE">
+          </div>
+          <div class="form-group">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+              <label class="form-label" for="input-inv-number" id="label-doc-number" style="margin-bottom:0;">Invoice #</label>
+              <button type="button" id="btn-quick-next-num" style="background:none; border:none; color:#2563eb; font-size:10.5px; font-weight:600; cursor:pointer; padding:0; display:inline-flex; align-items:center; gap:3px;" title="Regenerate next sequential number from engine">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l6.73-1.19"/></svg>
+                Next Seq #
+              </button>
+            </div>
+            <input type="text" class="form-input" id="input-inv-number" value="INV-2026-001">
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="input-inv-date" id="label-doc-date">Issue Date</label>
+            <input type="date" class="form-input" id="input-inv-date">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="input-inv-due" id="label-doc-due">Due Date</label>
+            <input type="date" class="form-input" id="input-inv-due">
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="select-inv-currency">Currency</label>
+            <select class="form-select" id="select-inv-currency">
+              <option value="$">USD ($)</option>
+              <option value="€">EUR (€)</option>
+              <option value="£">GBP (£)</option>
+              <option value="₹">INR (₹)</option>
+              <option value="C$">CAD (C$)</option>
+              <option value="A$">AUD (A$)</option>
+              <option value="¥">JPY (¥)</option>
+              <option value="CHF">CHF</option>
+              <option value="AED">AED</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="select-inv-number-format">Number &amp; Comma Style</label>
+            <select class="form-select" id="select-inv-number-format">
+              <option value="international" selected>International (1,234,567.89)</option>
+              <option value="indian">Indian Lakhs/Crores (12,34,567.89)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="input-inv-po" id="label-doc-po">P.O. / Ref Number</label>
+            <input type="text" class="form-input" id="input-inv-po" placeholder="e.g. PO-8902">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="select-inv-status">Status Badge</label>
+            <select class="form-select" id="select-inv-status">
+              <option value="draft">Draft</option>
+              <option value="pending" selected>Payment Pending</option>
+              <option value="paid">Paid</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:10px; margin-bottom:12px;">
+          <label class="form-label" style="cursor:pointer; display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="check-amount-in-words">
+            <span>Show Total in Words on Document (e.g. <em>Rupees / Dollars Only</em>)</span>
+          </label>
+        </div>
+
+        <div class="section-nav-footer">
+          <button class="btn btn-secondary btn-sm btn-next-tab" data-next="sec-parties">Next: Parties (From & To) &rarr;</button>
+        </div>
+      </section>
+
+      <!-- SECTION 4: PARTIES (FROM & BILL TO) -->
+      <section class="editor-section" id="sec-parties" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+            4A. Your Business (From)
+          </span>
+          <button class="btn btn-outline btn-sm" id="btn-save-sender-profile" title="Save this company information as default for all future invoices">
+            Save as Default
+          </button>
+        </div>
+
+        <!-- Company Profile Switcher Toolbar -->
+        <div class="company-profile-toolbar" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; margin-bottom:14px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+            <label class="form-label" style="margin-bottom:0; font-size:11.5px; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9h1M9 13h1M9 17h1M15 13h1M15 17h1"></path></svg>
+              <span>Saved Company Profile</span>
+            </label>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-quick-new-company" style="font-size:10.5px; padding:2px 7px;" title="Create and save a new company profile">
+                + New Company
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="btn-quick-manage-companies" style="font-size:10.5px; padding:2px 7px;" title="Manage all registered company profiles">
+                Manage
+              </button>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <select class="form-select" id="select-company-profile" style="flex:1; font-weight:600; font-size:12px; padding:5px 8px;">
+              <!-- Populated dynamically -->
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-update-sender-profile" style="font-size:11px; padding:5px 9px;" title="Update currently selected company profile with these values">
+              Save
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-sender-name">Business / Your Name</label>
+          <input type="text" class="form-input" id="input-sender-name" value="Apex Design & Tech Studio">
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="input-sender-email">Email</label>
+            <input type="email" class="form-input" id="input-sender-email" value="billing@apexstudio.io">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="input-sender-phone">Phone</label>
+            <input type="text" class="form-input" id="input-sender-phone" value="+1 (555) 234-5678">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-sender-address">Address & City</label>
+          <textarea class="form-textarea" id="input-sender-address" rows="2">100 Innovation Way, Suite 400&#10;San Francisco, CA 94107</textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-sender-taxid">Tax ID / GSTIN / VAT Reg #</label>
+          <input type="text" class="form-input" id="input-sender-taxid" placeholder="e.g. GSTIN 27AAAAA0000A1Z5, VAT, or EIN (optional)">
+          <div id="sender-tax-hint-box" style="margin-top:5px;"></div>
+        </div>
+
+        <div class="form-group" style="margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <label class="form-label" for="input-sender-payment" style="margin-bottom:0;">Bank &amp; Remittance Details (Optional)</label>
+            <button type="button" class="btn-link" id="btn-clear-sender-payment" style="font-size:11px; color:#ef4444; background:none; border:none; padding:0; cursor:pointer; display:none;">Clear / Remove</button>
+          </div>
+          <textarea class="form-textarea" id="input-sender-payment" rows="2" placeholder="e.g. Bank Name, Account #, IFSC/SWIFT, or UPI / PayPal ID (leave blank to omit)"></textarea>
+          <span style="font-size:10.5px; color:#64748b; margin-top:2px; display:block;" id="sender-payment-hint">Leave blank to omit remittance section from the invoice.</span>
+        </div>
+
+        <div class="section-header" style="margin-top:24px; padding-top:16px; border-top:1px dashed var(--border-subtle);">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+            4B. Client Details (Bill To)
+          </span>
+          <button class="btn btn-outline btn-sm" id="btn-save-client-to-book">
+            Add to Clients
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-client-name">Client / Company Name</label>
+          <input type="text" class="form-input" id="input-client-name" value="Starlight Enterprises Inc.">
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="input-client-email">Client Email</label>
+            <input type="email" class="form-input" id="input-client-email" value="accounts@starlight.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="input-client-phone">Client Phone</label>
+            <input type="text" class="form-input" id="input-client-phone" value="+1 (555) 987-6543">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-client-address">Billing Address</label>
+          <textarea class="form-textarea" id="input-client-address" rows="2">742 Evergreen Terrace&#10;Seattle, WA 98101</textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-client-taxid">Client Tax / VAT #</label>
+          <input type="text" class="form-input" id="input-client-taxid" placeholder="e.g. VAT-8941042">
+        </div>
+
+        <div class="section-nav-footer">
+          <button class="btn btn-secondary btn-sm btn-next-tab" data-next="sec-items">Next: Line Items & Taxes &rarr;</button>
+        </div>
+      </section>
+
+      <!-- SECTION 5: LINE ITEMS & MULTI-LEG TAXES -->
+      <section class="editor-section" id="sec-items" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line></svg>
+            5A. Line Items (Per-Item Taxes)
+          </span>
+        </div>
+
+        <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:12px;">
+          Set individual tax rates per item (e.g. 0% Exempt, 5%, 12%, 18% GST). Perfect for mixed goods & services.
+        </p>
+
+        <div id="items-editor-list">
+          <!-- Item rows inserted dynamically -->
+        </div>
+
+        <button class="btn btn-secondary btn-sm" id="btn-add-item" style="width:100%; margin-top:8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Add Line Item
+        </button>
+
+        <div class="section-header" style="margin-top:24px; padding-top:16px; border-top:1px dashed var(--border-subtle);">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="5" x2="5" y2="19"></line><circle cx="6.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="17.5" r="2.5"></circle></svg>
+            5B. Multi-Leg Tax Setup
+          </span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <select class="form-select" id="select-tax-preset" style="padding:3px 8px; font-size:11px;">
+              <option value="">Tax Presets...</option>
+              <option value="india_gst">India GST (CGST 50% + SGST 50%)</option>
+              <option value="india_igst">India IGST (Interstate 100%)</option>
+              <option value="us_state_county">US (State 75% + County 25%)</option>
+              <option value="single_vat">Single Standard VAT (100%)</option>
+              <option value="zero_tax">Zero / No Tax</option>
+            </select>
+          </div>
+        </div>
+
+        <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:10px;">
+          Define how taxes split into official legs (e.g. In India, an 18% item splits into 9% CGST + 9% SGST).
+        </p>
+
+        <div class="taxes-editor-container" id="taxes-editor-container">
+          <!-- Dynamic Tax Leg rows -->
+        </div>
+
+        <button class="btn btn-secondary btn-sm" id="btn-add-tax-leg" style="width:100%;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Add Tax Leg
+        </button>
+
+        <div class="section-nav-footer">
+          <button class="btn btn-secondary btn-sm btn-next-tab" data-next="sec-payment">Next: Payment & Notes &rarr;</button>
+        </div>
+      </section>
+
+      <!-- SECTION 6: PAYMENT INFO & NOTES -->
+      <section class="editor-section" id="sec-payment" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg>
+            6. Payment Details & Notes
+          </span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-payment-info">Bank &amp; Remittance Details</label>
+          <textarea class="form-textarea" id="input-payment-info" rows="3" placeholder="e.g. Bank Name, Account #, IFSC/SWIFT, or UPI / PayPal ID (leave blank to omit)"></textarea>
+          <span style="font-size:10.5px; color:#64748b; margin-top:2px; display:block;">Synced with Business Profile. Leave blank to omit remittance section from the invoice.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-notes">Notes & Terms to Client</label>
+          <textarea class="form-textarea" id="input-notes" rows="2">Payment is requested within 14 business days of invoice receipt. Thank you for your continued business!</textarea>
+        </div>
+
+        <div class="form-group" id="group-quote-signature" style="display:none; margin-top:8px;">
+          <label class="form-label" style="cursor:pointer; display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="check-quote-signature" checked>
+            <span>Show Client Acceptance Signature Block on Quote</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Sidebar Utharam Trust & Privacy Strip -->
+      <div class="sidebar-brand-footer">
+        <div class="sidebar-brand-mark">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="16" height="16" aria-hidden="true">
+            <rect width="32" height="32" rx="7" fill="#059669"/>
+            <text x="16" y="22" font-family="'JetBrains Mono', monospace" font-weight="800" font-size="18" fill="#ffffff" text-anchor="middle">U</text>
+          </svg>
+          <span>Created by <a href="https://utharam.in/" target="_blank" rel="noopener noreferrer"><strong>Utharam</strong></a></span>
+        </div>
+        <div class="sidebar-brand-desc">
+          Simple Solutions for Complex Problems &bull; 100% In-Browser Privacy
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Right Canvas: High Fidelity Live Sheet Preview -->
+    <section class="preview-canvas" id="preview-canvas">
+      
+      <!-- Floating Reopen Sidebar Button (when collapsed) -->
+      <button class="btn btn-primary btn-sm floating-sidebar-toggle" id="btn-expand-sidebar-floating" style="display:none;" title="Expand Sidebar Panel">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+        <span>Show Panel</span>
+      </button>
+
+      <!-- Sticky Canvas Zoom Toolbar -->
+      <div class="canvas-toolbar">
+        <button class="btn btn-secondary btn-sm btn-icon" id="btn-zoom-out" title="Zoom Out">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+        </button>
+        <span class="scale-label" id="scale-indicator">100%</span>
+        <button class="btn btn-secondary btn-sm btn-icon" id="btn-zoom-in" title="Zoom In">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btn-zoom-fit" style="margin-left:6px;">Fit</button>
+        <div class="page-count-badge" id="canvas-page-badge" title="Estimated document length in standard A4 pages">
+          <span class="page-badge-dot"></span>
+          <span id="canvas-page-text">A4: 1 Page</span>
+        </div>
+        <button class="btn btn-primary btn-sm" id="btn-print-preview" style="margin-left:6px;" title="Print or Save as Vector PDF (Ctrl+P)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+          Print / Save PDF
+        </button>
+      </div>
+
+      <!-- INVOICE SHEET CONTAINER -->
+      <div class="invoice-sheet-container" id="sheet-container">
+        <article class="invoice-sheet template-modern-swiss" id="invoice-sheet">
+          
+          <!-- Sheet Header -->
+          <div class="sheet-header" id="sheet-header-block">
+            <div class="sheet-logo-container" id="sheet-logo-wrapper">
+              <!-- Rendered logo will appear here -->
+            </div>
+            <div class="sheet-invoice-meta">
+              <h1 class="sheet-invoice-title" id="sheet-inv-title">INVOICE</h1>
+              <div>
+                <span class="sheet-invoice-badge badge-pending" id="sheet-status-badge">PAYMENT PENDING</span>
+              </div>
+              <div class="sheet-meta-grid">
+                <span class="sheet-meta-label" id="sheet-num-label">Invoice #:</span>
+                <span class="sheet-meta-val" id="sheet-inv-num">INV-2026-001</span>
+                <span class="sheet-meta-label" id="sheet-date-label">Date:</span>
+                <span class="sheet-meta-val" id="sheet-inv-date">2026-09-28</span>
+                <span class="sheet-meta-label" id="sheet-due-label">Due Date:</span>
+                <span class="sheet-meta-val" id="sheet-inv-due">2026-10-12</span>
+                <span class="sheet-meta-label" id="sheet-po-label">P.O. Ref:</span>
+                <span class="sheet-meta-val" id="sheet-po-val">PO-8902</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Parties: Bill From & Bill To -->
+          <div class="sheet-parties">
+            <div class="party-block">
+              <h4 id="sheet-from-heading">Billed From</h4>
+              <div class="party-name" id="sheet-sender-name">Apex Design & Tech Studio</div>
+              <div class="party-meta" id="sheet-sender-meta"></div>
+            </div>
+            <div class="party-block">
+              <h4 id="sheet-to-heading">Billed To</h4>
+              <div class="party-name" id="sheet-client-name">Starlight Enterprises Inc.</div>
+              <div class="party-meta" id="sheet-client-meta"></div>
+            </div>
+          </div>
+
+          <!-- Line Items Table -->
+          <table class="sheet-table">
+            <thead>
+              <tr>
+                <th style="width:38%;">Description</th>
+                <th class="text-center" style="width:10%;">Qty</th>
+                <th class="text-right" style="width:16%;">Unit Price</th>
+                <th class="text-right" style="width:10%;">Disc.</th>
+                <th class="text-right" style="width:12%;">Tax Rate</th>
+                <th class="text-right" style="width:14%;">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="sheet-items-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+
+          <!-- Bottom Section: Payment / Notes + Totals Breakdown -->
+          <div class="sheet-bottom-section">
+            <div class="payment-notes-block" id="sheet-payment-notes-area">
+              <div id="sheet-payment-container">
+                <div class="sheet-sub-heading" id="sheet-payment-heading">Remittance & Payment Instructions</div>
+                <div class="payment-details-box" id="sheet-payment-box"></div>
+              </div>
+              <div id="sheet-notes-container">
+                <div class="sheet-sub-heading" id="sheet-notes-heading">Terms & Notes</div>
+                <div class="sheet-notes-text" id="sheet-notes-box"></div>
+              </div>
+              <!-- Optional Quotation Client Signature Block -->
+              <div class="sheet-signature-box" id="sheet-signature-block" style="display:none;">
+                <div class="sheet-sub-heading" id="sheet-sig-heading" style="margin-bottom:6px;">Quotation Acceptance & Approval</div>
+                <div style="font-size:11px; color:#64748b; margin-bottom:14px;">I hereby approve the quote specifications and authorize commencement of work.</div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-end; font-size:11px; color:#475569; padding-top:4px;">
+                  <div>Authorized Signature: __________________________</div>
+                  <div>Date: _______________</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Totals & Multi-Leg Taxes Breakdown -->
+            <div class="sheet-totals-box">
+              <div class="totals-row">
+                <span id="sheet-subtotal-label">Subtotal</span>
+                <span id="sheet-subtotal-val">$0.00</span>
+              </div>
+              <div id="sheet-taxes-list">
+                <!-- Multi-leg taxes breakdown dynamically rendered here -->
+              </div>
+              <div class="totals-row total-due">
+                <span id="sheet-total-label">Total Amount Due</span>
+                <span id="sheet-total-val">$0.00</span>
+              </div>
+              <!-- Optional Amount in Words Block -->
+              <div class="totals-words-box" id="sheet-words-container" style="display:none;">
+                <div class="words-label">Amount in Words</div>
+                <div class="words-val" id="sheet-words-val"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sheet Footer -->
+          <footer class="sheet-footer" id="sheet-footer-text">
+            Thank you for your business!
+          </footer>
+        </article>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ========================================================================
+       MODAL 1: LOGO STUDIO (Upload, Monograms, Open Vector Icons & AI Prompt)
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-logo-studio">
+    <div class="modal-header">
+      <h3 class="modal-title">Logo & Brand Lockup Studio</h3>
+      <button class="btn btn-secondary btn-sm" id="btn-close-logo-modal" data-close-modal="modal-logo-studio" title="Close Studio">&times;</button>
+    </div>
+    
+    <div class="modal-body">
+      <!-- Tabs -->
+      <div class="modal-tabs">
+        <button class="modal-tab-btn active" data-tab="tab-upload">Upload JPG / PNG</button>
+        <button class="modal-tab-btn" data-tab="tab-monogram">Monogram & Wordmark</button>
+        <button class="modal-tab-btn" data-tab="tab-icons">Icon Brand Lockup (40+)</button>
+        <button class="modal-tab-btn" data-tab="tab-ai">AI Logo Prompt & Studio</button>
+      </div>
+
+      <!-- TAB 1: UPLOAD JPG / PNG / SVG -->
+      <div class="tab-pane active" id="tab-upload">
+        <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Upload your existing logo (.jpg, .jpeg, .png, .webp, or .svg). The image will be client-side optimized and stored safely in your local IndexedDB.
+        </p>
+
+        <div style="border:2px dashed var(--border-strong); border-radius:12px; padding:28px 16px; text-align:center; background:#f8fafc; cursor:pointer;" id="dropzone-logo">
+          <input type="file" id="file-logo-input" accept="image/jpeg,image/png,image/webp,image/svg+xml" style="display:none;">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" style="margin-bottom:8px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+          <div style="font-size:14px; font-weight:600; color:#1e293b;">Click to upload or drag & drop</div>
+          <div style="font-size:12px; color:#94a3b8; margin-top:4px;">JPG, PNG, WebP or SVG up to 10MB</div>
+        </div>
+
+        <div id="upload-preview-area" style="display:none; margin-top:16px; text-align:center;">
+          <img id="upload-preview-img" style="max-height:120px; border-radius:8px; border:1px solid #e2e8f0; padding:6px; background:#ffffff;">
+          <div style="margin-top:10px;">
+            <button class="btn btn-primary btn-sm" id="btn-apply-uploaded-logo">Use This Logo</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: MONOGRAM & BRAND LOCKUP GENERATOR -->
+      <div class="tab-pane" id="tab-monogram">
+        <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Create a complete corporate brand lockup combining a geometric monogram emblem, company wordmark, subtitle tagline, and decorative underlines.
+        </p>
+
+        <div class="form-grid-2">
+          <div>
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label class="form-label" for="monogram-initials">Initials</label>
+                <input type="text" class="form-input" id="monogram-initials" maxlength="3" value="AD">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="monogram-shape">Emblem Shape</label>
+                <select class="form-select" id="monogram-shape">
+                  <option value="squircle">Squircle Rounded</option>
+                  <option value="circle">Minimalist Circle</option>
+                  <option value="hexagon">Hexagon Tech</option>
+                  <option value="shield">Trust Shield</option>
+                  <option value="diamond">Diamond Jewel</option>
+                  <option value="square">Clean Square</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="monogram-style">Emblem Style</label>
+                <select class="form-select" id="monogram-style">
+                  <option value="solid" selected>Solid Fill</option>
+                  <option value="outline">Sleek Outline</option>
+                  <option value="soft">Soft Tint</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="monogram-wordmark">Company Wordmark</label>
+              <input type="text" class="form-input" id="monogram-wordmark" value="Apex Studio">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="monogram-tagline">Subtitle / Tagline</label>
+              <input type="text" class="form-input" id="monogram-tagline" value="Design & Technology Solutions">
+            </div>
+
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label class="form-label" for="monogram-underline">Underline Accent</label>
+                <select class="form-select" id="monogram-underline">
+                  <option value="solid">Sleek Solid Line</option>
+                  <option value="dashed">Modern Dashes</option>
+                  <option value="accent-pip">Line with Accent Pip</option>
+                  <option value="gradient">Fading Gradient Bar</option>
+                  <option value="double">Double Hairline</option>
+                  <option value="dots">Modern Dot Accent</option>
+                  <option value="offset-shadow">Offset Shadow Rule</option>
+                  <option value="none">No Underline (Clean)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="monogram-layout">Lockup Format</label>
+                <select class="form-select" id="monogram-layout">
+                  <option value="horizontal">Horizontal Lockup</option>
+                  <option value="stacked">Centered Stacked</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-grid-2">
+              <div class="form-group" style="margin-bottom:6px;">
+                <label class="form-label" for="monogram-underline-span">Underline Length</label>
+                <select class="form-select" id="monogram-underline-span">
+                  <option value="auto" selected>Fit Full Text (Auto)</option>
+                  <option value="title">Match Wordmark Only</option>
+                  <option value="short">Short Accent (45px)</option>
+                  <option value="extended">Extended (+35px)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:6px;">
+                <label class="form-label" for="monogram-underline-pos">Underline Placement</label>
+                <select class="form-select" id="monogram-underline-pos">
+                  <option value="bottom" selected>Below Subtitle (Bottom)</option>
+                  <option value="middle">Between Title &amp; Subtitle</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+                <span style="font-size:10.5px; color:#64748b;">Fine-tune Length:</span>
+                <span style="font-size:10.5px; font-weight:700; color:#2563eb;" id="monogram-underline-val">Auto (Fit Text)</span>
+              </div>
+              <input type="range" id="monogram-underline-slider" min="0" max="360" value="0" class="form-input" style="padding:2px 0;">
+            </div>
+
+            <div class="form-grid-3">
+              <div class="form-group">
+                <label class="form-label" for="monogram-bg-color">Badge</label>
+                <input type="color" id="monogram-bg-color" value="#2563eb" style="width:100%; height:32px; border:none; border-radius:6px; cursor:pointer;">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="monogram-text-color">Letter</label>
+                <input type="color" id="monogram-text-color" value="#ffffff" style="width:100%; height:32px; border:none; border-radius:6px; cursor:pointer;">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="monogram-wordmark-color">Title Text</label>
+                <input type="color" id="monogram-wordmark-color" value="#0f172a" style="width:100%; height:32px; border:none; border-radius:6px; cursor:pointer;">
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; background:#f8fafc; border-radius:12px; border:1px solid #e2e8f0; padding:16px;">
+            <div style="font-size:11px; font-weight:700; color:#64748b; letter-spacing:0.5px; text-transform:uppercase; margin-bottom:8px;">Live Brand Lockup Preview</div>
+            <div class="lockup-preview-box">
+              <img id="monogram-preview-img" alt="Monogram Brand Lockup">
+            </div>
+            <button class="btn btn-primary btn-sm" id="btn-apply-monogram" style="margin-top:16px; width:100%;">
+              Apply Brand Lockup to Invoice
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: OPEN ASSET ICONS & BRAND LOCKUP -->
+      <div class="tab-pane" id="tab-icons">
+        <p style="font-size:12.5px; color:#64748b; margin-bottom:10px;">
+          Pick a curated business icon, then customize your company wordmark, tagline, and underline style to form a cohesive brand identity.
+        </p>
+
+        <div class="icons-category-chips" id="icons-category-chips">
+          <!-- Dynamic category chips -->
+        </div>
+
+        <div class="icons-grid-picker" id="icons-grid-picker" style="max-height:160px;">
+          <!-- Dynamic 40+ icons -->
+        </div>
+
+        <div class="form-grid-2" style="margin-top:14px; padding-top:12px; border-top:1px solid #e2e8f0;">
+          <div>
+            <div class="form-group">
+              <label class="form-label" for="icon-wordmark">Company Wordmark</label>
+              <input type="text" class="form-input" id="icon-wordmark" value="Apex Studio">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="icon-tagline">Subtitle / Tagline</label>
+              <input type="text" class="form-input" id="icon-tagline" value="Consulting & Digital Advisory">
+            </div>
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label class="form-label" for="icon-underline">Underline Style</label>
+                <select class="form-select" id="icon-underline">
+                  <option value="solid">Sleek Solid Line</option>
+                  <option value="dashed">Modern Dashes</option>
+                  <option value="accent-pip">Line with Accent Pip</option>
+                  <option value="gradient">Fading Gradient Bar</option>
+                  <option value="double">Double Hairline</option>
+                  <option value="dots">Modern Dot Accent</option>
+                  <option value="offset-shadow">Offset Shadow Rule</option>
+                  <option value="none">No Underline (Clean)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="icon-shape">Icon Background</label>
+                <select class="form-select" id="icon-shape">
+                  <option value="none">Clean Freeform Icon</option>
+                  <option value="squircle">Squircle Badge</option>
+                  <option value="circle">Circle Badge</option>
+                  <option value="square">Square Badge</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-grid-2">
+              <div class="form-group" style="margin-bottom:6px;">
+                <label class="form-label" for="icon-underline-span">Underline Length</label>
+                <select class="form-select" id="icon-underline-span">
+                  <option value="auto" selected>Fit Full Text (Auto)</option>
+                  <option value="title">Match Wordmark Only</option>
+                  <option value="short">Short Accent (45px)</option>
+                  <option value="extended">Extended (+35px)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:6px;">
+                <label class="form-label" for="icon-underline-pos">Underline Placement</label>
+                <select class="form-select" id="icon-underline-pos">
+                  <option value="bottom" selected>Below Subtitle (Bottom)</option>
+                  <option value="middle">Between Title &amp; Subtitle</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+                <span style="font-size:10.5px; color:#64748b;">Fine-tune Length:</span>
+                <span style="font-size:10.5px; font-weight:700; color:#2563eb;" id="icon-underline-val">Auto (Fit Text)</span>
+              </div>
+              <input type="range" id="icon-underline-slider" min="0" max="360" value="0" class="form-input" style="padding:2px 0;">
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; background:#f8fafc; border-radius:12px; border:1px solid #e2e8f0; padding:16px;">
+            <div style="font-size:11px; font-weight:700; color:#64748b; letter-spacing:0.5px; text-transform:uppercase; margin-bottom:8px;" id="selected-icon-label">Selected: Terminal Console</div>
+            <div class="lockup-preview-box">
+              <img id="icon-preview-img" alt="Icon Brand Lockup">
+            </div>
+            <button class="btn btn-primary btn-sm" id="btn-apply-selected-icon" style="margin-top:16px; width:100%;">
+              Apply Icon Brand Lockup
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: AI LOGO PROMPT & GENERATOR -->
+      <div class="tab-pane" id="tab-ai">
+        <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+          Craft an optimized prompt for your company logo to use in ChatGPT, Midjourney, or Gemini — or generate a free instant AI logo with 1 click!
+        </p>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="ai-company-name">Brand / Business Name</label>
+            <input type="text" class="form-input" id="ai-company-name" value="Apex Studio">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ai-industry">Industry / Niche</label>
+            <input type="text" class="form-input" id="ai-industry" value="Software & Creative Agency">
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" for="ai-style-select">Aesthetic Style</label>
+            <select class="form-select" id="ai-style-select">
+              <option value="minimalist flat vector emblem, clean geometric lines, monochrome with accent color">Minimalist Geometric Flat</option>
+              <option value="swiss graphic style, high contrast, clean typography mark, modern grid">Swiss Modern Mark</option>
+              <option value="futuristic cyberpunk logo, neon cyan accents, technological emblem">Futuristic Tech / Cyber</option>
+              <option value="luxury crest, elegant serif monogram, timeless heritage badge">Luxury Editorial Crest</option>
+              <option value="neobrutalist badge, heavy black outline, punchy primary colors">Neobrutalist Pop Badge</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ai-color-preference">Color Theme</label>
+            <input type="text" class="form-input" id="ai-color-preference" value="Cobalt blue and slate">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label class="form-label">Optimized AI Prompt (Ready to Copy)</label>
+            <button class="btn btn-secondary btn-sm" id="btn-copy-ai-prompt" style="padding:2px 8px; font-size:11px;">Copy Prompt</button>
+          </div>
+          <div class="ai-prompt-box" id="ai-prompt-output">
+            Loading prompt...
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:12px; font-weight:600; color:#334155;">Free 1-Click AI Generation</span>
+            <button class="btn btn-outline btn-sm" id="btn-generate-ai-logo">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path></svg>
+              Generate AI Logo Now
+            </button>
+          </div>
+          <div class="ai-preview-zone" id="ai-preview-zone">
+            <span style="font-size:12px; color:#94a3b8;" id="ai-status-text">Click "Generate AI Logo Now" to test free instant AI logo creation</span>
+            <img id="ai-generated-img" style="display:none;" alt="Generated AI Logo">
+          </div>
+          <button class="btn btn-primary btn-sm" id="btn-apply-ai-logo" style="width:100%; margin-top:10px; display:none;">
+            Use This Generated AI Logo
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-logo-modal" data-close-modal="modal-logo-studio">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 2: SAVED INVOICES (IndexedDB History)
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-invoices">
+    <div class="modal-header">
+      <h3 class="modal-title">Saved Invoices (IndexedDB Local Storage)</h3>
+      <button class="btn btn-secondary btn-sm" id="btn-close-invoices-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+        All invoices are saved locally in your browser's IndexedDB. You can reload, duplicate, or delete any record.
+      </p>
+      <div id="saved-invoices-list" style="display:flex; flex-direction:column; gap:8px;">
+        <!-- Invoices list dynamically populated -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-invoices-modal">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 3: CLIENT DIRECTORY
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-clients">
+    <div class="modal-header">
+      <h3 class="modal-title">Client Directory</h3>
+      <button class="btn btn-secondary btn-sm" id="btn-close-clients-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
+        Reusable clients saved in your local database for 1-click auto-fill into invoices.
+      </p>
+      <div id="clients-list" style="display:flex; flex-direction:column; gap:8px;">
+        <!-- Clients list dynamically populated -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-clients-modal">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 4: BACKUP & RESTORE
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-backup">
+    <div class="modal-header">
+      <h3 class="modal-title">Database Backup & Restore</h3>
+      <button class="btn btn-secondary btn-sm" id="btn-close-backup-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:16px;">
+        Export your complete IndexedDB data (all invoices, clients, profiles, and logos) into a portable JSON backup file, or restore a previously saved backup.
+      </p>
+
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:16px; margin-bottom:16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#1e293b; margin-bottom:6px;">Export Database Backup</h4>
+        <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Download all your records as a secure local JSON file.</p>
+        <button class="btn btn-primary btn-sm" id="btn-export-json">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Export Backup (.json)
+        </button>
+      </div>
+
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#1e293b; margin-bottom:6px;">Restore from Backup</h4>
+        <p style="font-size:12px; color:#64748b; margin-bottom:10px;">Upload a previously exported JSON backup file.</p>
+        <input type="file" id="file-import-input" accept=".json" style="display:none;">
+        <button class="btn btn-secondary btn-sm" id="btn-trigger-import">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Select & Restore Backup File
+        </button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-backup-modal">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 5: COMPANY PROFILES MANAGER (Multiple Companies)
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-companies">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9h1M9 13h1M9 17h1M15 13h1M15 17h1"></path></svg>
+        <h3 class="modal-title">Company Profiles Manager</h3>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-close-companies-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:16px;">
+        Save, switch between, and manage multiple business entities, freelancing names, and regional companies.
+      </p>
+
+      <!-- Add/Edit Company Profile Card -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:16px; margin-bottom:20px;" id="company-form-card">
+        <h4 style="font-size:13px; font-weight:700; color:#1e293b; margin-bottom:10px;" id="company-form-heading">
+          Add New Company Profile
+        </h4>
+        <input type="hidden" id="modal-company-id">
+        
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" for="modal-company-name">Company / Trading Name *</label>
+          <input type="text" class="form-input" id="modal-company-name" placeholder="e.g. Apex Design Studio LLC">
+        </div>
+
+        <div class="form-grid-2" style="margin-bottom:10px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="modal-company-email">Email</label>
+            <input type="email" class="form-input" id="modal-company-email" placeholder="billing@apexstudio.io">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="modal-company-phone">Phone</label>
+            <input type="text" class="form-input" id="modal-company-phone" placeholder="+1 (555) 234-5678">
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" for="modal-company-address">Address & City</label>
+          <textarea class="form-textarea" id="modal-company-address" rows="2" placeholder="Street, Suite, City, Postal Code, Country"></textarea>
+        </div>
+
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" for="modal-company-taxid">Tax ID / VAT / GSTIN Number</label>
+          <input type="text" class="form-input" id="modal-company-taxid" placeholder="e.g. US-EIN 12-3456789 or 27AAAAA0000A1Z5">
+        </div>
+
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label" for="modal-company-payment">Default Bank & Remittance Instructions</label>
+          <textarea class="form-textarea" id="modal-company-payment" rows="2" placeholder="Bank Name, Account #, SWIFT/IBAN, UPI/PayPal"></textarea>
+        </div>
+
+        <div style="display:flex; align-items:center; justify-content:space-between; padding-top:6px;">
+          <label style="font-size:12px; font-weight:600; color:#475569; display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="modal-company-is-default">
+            <span>Set as Default Company Profile</span>
+          </label>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-company-edit" style="display:none;">Cancel Edit</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-load-utharam-preset" title="Fill form with official Utharam Studio profile" style="color:#059669; font-weight:600;">+ Preset: Utharam</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-save-company-modal">Save Company Profile</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Saved Companies List -->
+      <h4 style="font-size:13px; font-weight:700; color:#1e293b; margin-bottom:10px;">
+        Saved Companies (<span id="modal-companies-list-count">0</span>)
+      </h4>
+      <div class="companies-list" id="modal-companies-list" style="display:flex; flex-direction:column; gap:10px;">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-companies-modal">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 6: INVOICE & DOCUMENT NUMBERING ENGINE
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-numbering-engine">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path><circle cx="12" cy="12" r="4"></circle></svg>
+        <h3 class="modal-title">Invoice & Document Numbering Engine</h3>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-close-numbering-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:16px;">
+        Configure continuous automated numbering with custom schemes, financial or calendar year resets, or switch to manual numbering at your discretion.
+      </p>
+
+      <!-- Mode Selector -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-bottom:16px;">
+        <label class="form-label" style="margin-bottom:8px; font-weight:700;">Numbering Mode</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <label style="border:1px solid #cbd5e1; border-radius:8px; padding:10px 12px; cursor:pointer; background:#ffffff; display:flex; align-items:flex-start; gap:8px;" id="lbl-mode-auto">
+            <input type="radio" name="num-mode" id="radio-mode-auto" value="auto" checked style="margin-top:2px;">
+            <div>
+              <div style="font-size:12.5px; font-weight:700; color:#0f172a;">Continuous Auto-Sequence</div>
+              <div style="font-size:11px; color:#64748b; margin-top:2px;">Auto-advances sequentially, handles yearly resets &amp; custom starting counter.</div>
+            </div>
+          </label>
+          <label style="border:1px solid #cbd5e1; border-radius:8px; padding:10px 12px; cursor:pointer; background:#ffffff; display:flex; align-items:flex-start; gap:8px;" id="lbl-mode-manual">
+            <input type="radio" name="num-mode" id="radio-mode-manual" value="manual" style="margin-top:2px;">
+            <div>
+              <div style="font-size:12.5px; font-weight:700; color:#0f172a;">Complete Manual Entry</div>
+              <div style="font-size:11px; color:#64748b; margin-top:2px;">Type any invoice number directly at your discretion without auto-rules.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Auto Numbering Settings Container -->
+      <div id="auto-numbering-settings-panel">
+        
+        <!-- Live Preview Banner -->
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
+          <div style="font-size:11px; font-weight:700; color:#1e40af; text-transform:uppercase; letter-spacing:0.5px;">Live Scheme Preview</div>
+          <div style="display:flex; align-items:baseline; justify-content:space-between; margin-top:4px; flex-wrap:wrap; gap:8px;">
+            <div style="font-size:18px; font-weight:800; color:#1d4ed8; font-family:'JetBrains Mono', monospace;" id="num-preview-text">
+              INV/2026-27/0001
+            </div>
+            <div style="font-size:11.5px; color:#3b82f6;">
+              Quote: <span id="num-preview-quote" style="font-weight:600; font-family:'JetBrains Mono', monospace;">QT/2026-27/0001</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Preset Scheme Quick Picks -->
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label">Suggested Schemes (Click to apply)</label>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <button type="button" class="btn btn-secondary btn-sm btn-scheme-preset" data-scheme="{PREFIX}/{FY}/{COUNTER}" style="font-family:'JetBrains Mono', monospace; font-size:11px;">
+              INV/{FY}/{COUNTER}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm btn-scheme-preset" data-scheme="{PREFIX}-{YYYY}-{COUNTER}" style="font-family:'JetBrains Mono', monospace; font-size:11px;">
+              INV-{YYYY}-{COUNTER}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm btn-scheme-preset" data-scheme="{PREFIX}/{YYYY}-{MM}/{COUNTER}" style="font-family:'JetBrains Mono', monospace; font-size:11px;">
+              INV/{YYYY}-{MM}/{COUNTER}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm btn-scheme-preset" data-scheme="{PREFIX}-{COUNTER}" style="font-family:'JetBrains Mono', monospace; font-size:11px;">
+              INV-{COUNTER}
+            </button>
+          </div>
+        </div>
+
+        <!-- Custom Scheme Pattern Input -->
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label" for="num-cfg-pattern">Custom Scheme Pattern</label>
+          <input type="text" class="form-input" id="num-cfg-pattern" value="{PREFIX}/{FY}/{COUNTER}" style="font-family:'JetBrains Mono', monospace; font-weight:600;">
+          <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; align-items:center;">
+            <span style="font-size:10.5px; color:#64748b;">Insert variable:</span>
+            <button type="button" class="btn-token-insert" data-token="{PREFIX}">{PREFIX}</button>
+            <button type="button" class="btn-token-insert" data-token="{FY}">{FY} (e.g. 2026-27)</button>
+            <button type="button" class="btn-token-insert" data-token="{YYYY}">{YYYY}</button>
+            <button type="button" class="btn-token-insert" data-token="{YY}">{YY}</button>
+            <button type="button" class="btn-token-insert" data-token="{MM}">{MM}</button>
+            <button type="button" class="btn-token-insert" data-token="{COUNTER}">{COUNTER}</button>
+          </div>
+        </div>
+
+        <!-- Document Type Prefixes -->
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label">Document Prefixes ({PREFIX})</label>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;">
+            <div>
+              <label style="font-size:10.5px; color:#64748b; display:block; margin-bottom:2px;">Invoice</label>
+              <input type="text" class="form-input" id="num-prefix-inv" value="INV" style="text-align:center; font-weight:700; padding:5px 6px;">
+            </div>
+            <div>
+              <label style="font-size:10.5px; color:#64748b; display:block; margin-bottom:2px;">Quotation</label>
+              <input type="text" class="form-input" id="num-prefix-qt" value="QT" style="text-align:center; font-weight:700; padding:5px 6px;">
+            </div>
+            <div>
+              <label style="font-size:10.5px; color:#64748b; display:block; margin-bottom:2px;">Estimate</label>
+              <input type="text" class="form-input" id="num-prefix-est" value="EST" style="text-align:center; font-weight:700; padding:5px 6px;">
+            </div>
+            <div>
+              <label style="font-size:10.5px; color:#64748b; display:block; margin-bottom:2px;">Proforma</label>
+              <input type="text" class="form-input" id="num-prefix-pi" value="PI" style="text-align:center; font-weight:700; padding:5px 6px;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Counter & Zero Padding -->
+        <div class="form-grid-2" style="margin-bottom:12px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="num-cfg-counter">Next Counter / Starting Number</label>
+            <input type="number" class="form-input" id="num-cfg-counter" min="1" step="1" value="1">
+            <span style="font-size:10.5px; color:#64748b; display:block; margin-top:3px;">
+              Already issued 575 invoices? Set to <strong>576</strong> to continue without gap.
+            </span>
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label" for="num-cfg-padding">Counter Digits (Zero-Padding)</label>
+            <select class="form-select" id="num-cfg-padding">
+              <option value="1">1 digit (no padding: 1, 2, 576)</option>
+              <option value="3">3 digits (001, 002, 576)</option>
+              <option value="4" selected>4 digits (0001, 0002, 0576)</option>
+              <option value="5">5 digits (00001, 00002, 00576)</option>
+              <option value="6">6 digits (000001)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Year Reset Rule -->
+        <div class="form-group" style="margin-bottom:12px;">
+          <label class="form-label" for="num-cfg-reset">Automated Sequence Reset Rule</label>
+          <select class="form-select" id="num-cfg-reset">
+            <option value="financial_year" selected>Reset at Financial Year start (April 1st e.g. 2025-26 &rarr; 2026-27)</option>
+            <option value="calendar_year">Reset at Calendar Year start (January 1st e.g. 2026 &rarr; 2027)</option>
+            <option value="monthly">Reset each month (e.g. 2026-09 &rarr; 2026-10)</option>
+            <option value="never">Never reset (Continuous counter across years forever)</option>
+          </select>
+          <span style="font-size:10.5px; color:#64748b; display:block; margin-top:3px;">
+            When the active period completes, the counter automatically restarts at the starting number.
+          </span>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+      <button class="btn btn-secondary" id="btn-cancel-numbering-modal">Close</button>
+      <button class="btn btn-primary" id="btn-save-numbering-modal">Save &amp; Apply to Document</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 7: YOUR DATA IS PRIVATE & LOCAL STORAGE NOTICE
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-privacy-notice" style="max-width:620px;">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="width:30px; height:30px; border-radius:50%; background:#ecfdf5; color:#059669; display:flex; align-items:center; justify-content:center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <div>
+          <h3 class="modal-title" style="margin:0; font-size:15px;">Your Data is 100% Private</h3>
+          <span style="font-size:11px; color:#64748b;">Client-Side Architecture &amp; Data Safety Notice</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-close-privacy-modal">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;">
+      
+      <!-- Section 1: Why it's safe -->
+      <div style="margin-bottom:18px;">
+        <h4 style="font-size:13px; font-weight:700; color:#065f46; display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Why your data is private and safe:
+        </h4>
+        <ul style="font-size:12.5px; color:#334155; line-height:1.6; padding-left:18px; margin:0;">
+          <li><strong>Zero Cloud Uploads:</strong> Every invoice, quotation, line item, bank detail, and customer address remains exclusively inside your browser's local memory.</li>
+          <li><strong>No Backend Database:</strong> There is no remote cloud server receiving your commercial figures, client names, GSTIN/tax IDs, or financial ledgers.</li>
+          <li><strong>Works 100% Offline:</strong> You can disconnect your internet, turn on Airplane Mode, and create or print invoices without network access.</li>
+          <li><strong>Zero Trackers or Telemetry:</strong> No analytics cookies, no surveillance beacons, and no account signups required.</li>
+        </ul>
+      </div>
+
+      <!-- Section 2: The IndexedDB Risk Warning -->
+      <div style="background:#fffbeb; border:1px solid #fef3c7; border-left:4px solid #f59e0b; border-radius:8px; padding:14px 16px; margin-bottom:18px;">
+        <h4 style="font-size:13px; font-weight:700; color:#92400e; display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Important: Understanding the risk of Browser Storage (IndexedDB)
+        </h4>
+        <p style="font-size:12px; color:#78350f; line-height:1.55; margin:0 0 8px 0;">
+          Because your records are saved locally in your browser's <strong>IndexedDB</strong> and not on an external cloud server, your data can be wiped if:
+        </p>
+        <ul style="font-size:12px; color:#78350f; line-height:1.55; padding-left:18px; margin:0;">
+          <li>You clear your browser cache, history, or cookies (via "Clear Browsing Data").</li>
+          <li>You use an Incognito / Private Browsing window (which purges storage when the tab or window closes).</li>
+          <li>A disk cleanup utility, privacy cleaner, or operating system optimizer cleans up browser site storage.</li>
+          <li>You switch browser profiles, reset your computer, or change devices.</li>
+        </ul>
+      </div>
+
+      <!-- Section 3: Recommendation / CTA -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px 16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+          <div>
+            <h5 style="font-size:12.5px; font-weight:700; color:#1e293b; margin:0 0 3px 0;">Best Practice: Export regular JSON backups</h5>
+            <p style="font-size:11.5px; color:#64748b; margin:0; line-height:1.4;">
+              Download a 1-click JSON backup file at the end of each billing cycle to ensure your records are permanently safe.
+            </p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-quick-export-from-privacy" style="white-space:nowrap;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Download Backup Now (JSON)
+          </button>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:11px; color:#64748b;">The Local-First Standard &bull; Utharam</span>
+      <button class="btn btn-secondary" id="btn-cancel-privacy-modal">I Understand</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 8: USER GUIDE & README (First-Time User Walkthrough)
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-user-guide" style="max-width:720px;">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="width:30px; height:30px; border-radius:50%; background:#eff6ff; color:#2563eb; display:flex; align-items:center; justify-content:center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </div>
+        <div>
+          <h3 class="modal-title" style="margin:0; font-size:15px;">InvoiceCraft Quick Start &amp; User Guide</h3>
+          <span style="font-size:11px; color:#64748b;">A fast overview of tools, workflows, and keyboard shortcuts</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-close-guide-modal">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:20px 24px;">
+      
+      <!-- 3-Step Workflow -->
+      <div style="margin-bottom:20px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:10px;">Quick-Start Workflow</h4>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px;">
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">1. Type &amp; Model</div>
+            <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
+              Choose <strong>Invoice, Quotation, Estimate, or Proforma</strong>. Select from 10 Swiss, Minimalist, or Corporate architectural layouts.
+            </p>
+          </div>
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">2. Brand &amp; Details</div>
+            <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
+              Open <strong>Logo Studio</strong> to upload a logo, craft a custom monogram, or pick vector icons. Set dates, currency, &amp; comma styles.
+            </p>
+          </div>
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
+            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">3. Items &amp; Taxes</div>
+            <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
+              Set individual tax rates per item (0% Exempt, 5%, 12%, 18% GST). Configure official multi-leg splits (e.g. 50% CGST + 50% SGST).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature Highlights -->
+      <div style="margin-bottom:20px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:10px;">Key Capabilities</h4>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:145px;">Continuous Numbering:</span>
+            <span>Click the <strong>Numbering Engine</strong> button next to Invoice # to configure auto-incrementing patterns (<code>{PREFIX}/{FY}/{COUNTER}</code>), starting counter offsets (e.g. resume from 576), and year resets. Use <strong>Next Seq #</strong> for a one-click sequential refresh.</span>
+          </div>
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:145px;">Comma Formatting:</span>
+            <span>Toggle between <strong>International</strong> (<code>1,234,567.89</code>) and <strong>Indian Lakhs/Crores</strong> (<code>12,34,567.89</code>) in Module 3.</span>
+          </div>
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:145px;">Multiple Companies:</span>
+            <span>Manage 3, 5, or 10+ business entities. Switch companies with 1 click using the top navbar or sender module.</span>
+          </div>
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:145px;">Quotation Conversion:</span>
+            <span>Convert approved Estimates or Quotations into final Tax Invoices with a single click.</span>
+          </div>
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:145px;">Bank &amp; Tax Guard:</span>
+            <span>If you leave Bank Details or Tax ID blank, InvoiceCraft automatically optimizes the layout to cleanly omit empty boxes.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Vector Print / PDF Export -->
+      <div style="background:#f1f5f9; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
+        <div style="font-size:12px; font-weight:700; color:#0f172a; margin-bottom:4px;">Print &amp; Vector PDF Export</div>
+        <p style="font-size:11.5px; color:#475569; margin:0 0 6px 0; line-height:1.45;">
+          Click <strong>Print / Save PDF</strong> (or press <code>Ctrl+P</code>) to export:
+        </p>
+        <ul style="font-size:11.5px; color:#475569; margin:0; padding-left:18px; line-height:1.45;">
+          <li>Destination: <strong>Save as PDF</strong> (generates a 100% selectable, crystal-sharp vector PDF)</li>
+          <li>Optimized layout guarantees a <strong>clean 1-page fit</strong> with zero browser headers or URL watermarks.</li>
+        </ul>
+      </div>
+
+      <!-- Keyboard Shortcuts -->
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:11.5px; color:#64748b;">
+        <span style="font-weight:600; color:#334155;">Keyboard Shortcuts:</span>
+        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+B</kbd> Toggle Sidebar
+        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+S</kbd> Save to IndexedDB
+        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+P</kbd> Print / Save PDF
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="btn-got-it-guide">Got It, Let's Build</button>
+    </div>
+  </dialog>
+
+  <!-- Main Application Script (Standalone bundle for local double-click & web server compatibility) -->
+  <script src="js/bundle.js"></script>
+</body>
+</html>

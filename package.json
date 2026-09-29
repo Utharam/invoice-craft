@@ -1,0 +1,20 @@
+{
+  "name": "invoicecraft",
+  "version": "1.0.0",
+  "description": "Browser-based invoice generator with IndexedDB persistence, 10 design models, multi-leg taxes, and Logo Studio.",
+  "scripts": {
+    "build": "node build.js",
+    "prestart": "node build.js",
+    "start": "npx -y serve ."
+  },
+  "keywords": [
+    "invoice",
+    "generator",
+    "indexeddb",
+    "pdf",
+    "taxes",
+    "local-first"
+  ],
+  "author": "",
+  "license": "MIT"
+}

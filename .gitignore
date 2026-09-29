@@ -1,0 +1,14 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary and log files
+*.log
+scratch/
