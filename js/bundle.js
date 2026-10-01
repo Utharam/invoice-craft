@@ -1,5 +1,5 @@
 /**
- * InvoiceCraft Standalone Bundle
+ * InvoiceCraft Standalone Bundle v1.1.0
  * 100% Client-Side Plug-and-Play (Runs on both http:// and file://)
  */
 (function() {

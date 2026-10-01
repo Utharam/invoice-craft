@@ -1,4 +1,4 @@
-# InvoiceCraft ⚡
+# InvoiceCraft ⚡ `v1.1.0`
 > **A Plug-and-Play, Local-First, Browser-Based Invoice Generator**
 > Built with 100% Client-Side Web Standards, IndexedDB Storage, 10 Curated Visual Models, Multi-Leg Tax Engine, and a Multi-Mode Logo Studio.
 

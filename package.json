@@ -1,6 +1,6 @@
 {
   "name": "invoicecraft",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Browser-based invoice generator with IndexedDB persistence, 10 design models, multi-leg taxes, and Logo Studio.",
   "scripts": {
     "build": "node build.js",

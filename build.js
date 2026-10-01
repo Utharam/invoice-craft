@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+
 const dbContent = fs.readFileSync(path.join(__dirname, 'js', 'db.js'), 'utf8')
   .replace(/^\s*export\s+/gm, '');
 
@@ -13,7 +15,7 @@ let appContent = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8')
   .replace(/^\s*export\s+/gm, '');
 
 const bundle = `/**
- * InvoiceCraft Standalone Bundle
+ * InvoiceCraft Standalone Bundle v${pkg.version}
  * 100% Client-Side Plug-and-Play (Runs on both http:// and file://)
  */
 (function() {
