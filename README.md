@@ -48,17 +48,23 @@
    * Uses browser native vector rendering via `window.print()` with a dedicated `@media print` and `@page { size: A4 portrait; margin: 0mm; }` stylesheet.
    * 100% razor-sharp vector text, selectable text, zero browser header/footer marks (no IP or timestamp URLs), and automatic multi-page repeating table headers.
 
-7. **Dual Number Formatting & Amount in Words Engine**:
-   * Seamlessly switch between **Indian Format** (`12,34,567.89` with Lakhs/Crores and Rupees/Paise words) and **International Standard** (`1,234,567.89` with Millions/Billions and Dollars/Cents words).
-   * Optional, non-intrusive legal Amount in Words toggle with sub-cent rounding overflow protection.
+7. **Global & Middle Eastern Currencies + Custom Currency**:
+   * Pre-configured presets for **USD ($)**, **EUR (€)**, **GBP (£)**, **INR (₹)**, **CAD (C$)**, **AUD (A$)**, **JPY (¥)**, **CHF**, plus major Middle Eastern currencies: **BHD** (Bahraini Dinar), **SAR** (Saudi Riyal), **AED** (UAE Dirham), **QAR** (Qatari Riyal), **KWD** (Kuwaiti Dinar), and **OMR** (Omani Rial).
+   * **Custom Currency Input**: Type any symbol or ISO code (e.g. `SGD`, `NZD`, `ZAR`) with automated words conversion.
 
-8. **Live A4 Page Fit Engine & Smart Guides**:
+8. **Dual Number Formatting & Legal Amount in Words Engine**:
+   * Seamlessly switch between **Indian Format** (`12,34,567.89` with Lakhs/Crores and Rupees/Paise words) and **International Standard** (`1,234,567.89` with Millions/Billions and Dollars/Cents words).
+   * Exact grammatical words dictionary for Middle Eastern currencies (*Dinars/Fils*, *Riyals/Halalas*, *Dirhams/Fils*, *Rials/Baisa*).
+   * Sub-cent rounding overflow protection.
+
+9. **Live A4 Page Fit Engine & Smart Guides**:
    * Real-time document geometry engine with an on-canvas status badge (`A4: 1 Page` / `A4: X Pages`).
    * Visual page boundary guides indicate exact page transitions during editing, while automatically staying hidden during PDF export.
 
-9. **Client Book & Business Defaults**:
-   * Save recurring clients to the **Client Directory** for 1-click auto-fill.
-   * Save your company profile as the default for all future invoices, with pre-configured templates for multi-company management.
+10. **Previous Invoices History & Client Vault**:
+    * **Previous Invoices Modal**: Real-time keyword search, document type filter chips (`All`, `Invoices`, `Quotes`, `Estimates`, `Proformas`), and filter by client dropdown.
+    * **Client Directory with Billing History**: View past documents and total revenue per client with expandable history drawers, 1-click document reloading, and 1-click new document drafting.
+    * **Graceful New Document Prompt**: Protects against accidental data loss with *Save & Start Fresh*, *Discard*, and *Cancel* options.
 
 ---
 

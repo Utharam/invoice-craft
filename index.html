@@ -56,9 +56,9 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9h1M9 13h1M9 17h1M15 13h1M15 17h1"></path></svg>
         Companies (<span id="saved-companies-count">0</span>)
       </button>
-      <button class="btn btn-secondary btn-sm" id="btn-open-invoices-modal" title="View saved invoices in IndexedDB">
+      <button class="btn btn-secondary btn-sm" id="btn-open-invoices-modal" title="View previous invoices and document history in IndexedDB">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
-        Saved (<span id="saved-invoices-count">0</span>)
+        Previous Invoices (<span id="saved-invoices-count">0</span>)
       </button>
       <button class="btn btn-secondary btn-sm" id="btn-open-clients-modal" title="Address book of clients">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
@@ -358,16 +358,29 @@
           <div class="form-group">
             <label class="form-label" for="select-inv-currency">Currency</label>
             <select class="form-select" id="select-inv-currency">
-              <option value="$">USD ($)</option>
-              <option value="€">EUR (€)</option>
-              <option value="£">GBP (£)</option>
-              <option value="₹">INR (₹)</option>
-              <option value="C$">CAD (C$)</option>
-              <option value="A$">AUD (A$)</option>
-              <option value="¥">JPY (¥)</option>
-              <option value="CHF">CHF</option>
-              <option value="AED">AED</option>
+              <optgroup label="Popular Global">
+                <option value="$">USD ($)</option>
+                <option value="€">EUR (€)</option>
+                <option value="£">GBP (£)</option>
+                <option value="₹">INR (₹)</option>
+                <option value="C$">CAD (C$)</option>
+                <option value="A$">AUD (A$)</option>
+                <option value="¥">JPY (¥)</option>
+                <option value="CHF">CHF (Swiss Franc)</option>
+              </optgroup>
+              <optgroup label="Middle East">
+                <option value="AED">AED (UAE Dirham)</option>
+                <option value="SAR">SAR (Saudi Riyal)</option>
+                <option value="BHD">BHD (Bahraini Dinar)</option>
+                <option value="QAR">QAR (Qatari Riyal)</option>
+                <option value="KWD">KWD (Kuwaiti Dinar)</option>
+                <option value="OMR">OMR (Omani Rial)</option>
+              </optgroup>
+              <option value="custom">Custom Currency...</option>
             </select>
+            <div id="custom-currency-wrapper" style="display:none; margin-top:6px;">
+              <input type="text" class="form-input" id="input-custom-currency" placeholder="Enter symbol or code (e.g. BD, SGD, NZD)" maxlength="8" style="font-weight:600;">
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label" for="select-inv-number-format">Number &amp; Comma Style</label>
@@ -1081,40 +1094,95 @@
   </dialog>
 
   <!-- ========================================================================
-       MODAL 2: SAVED INVOICES (IndexedDB History)
+       MODAL: CONFIRM NEW DOCUMENT (Graceful Save Prompt)
        ======================================================================== -->
-  <dialog class="app-modal" id="modal-invoices">
+  <dialog class="app-modal" id="modal-confirm-new-doc" style="max-width:500px;">
     <div class="modal-header">
-      <h3 class="modal-title">Saved Invoices (IndexedDB Local Storage)</h3>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        <h3 class="modal-title">Start a Fresh Document?</h3>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btn-close-new-doc-modal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:#334155; margin-bottom:8px;">
+        You are currently working on <strong id="new-doc-cur-title">Invoice</strong>.
+      </p>
+      <p style="font-size:12px; color:#64748b; margin-bottom:16px;">
+        Would you like to save this document to your history before starting a fresh blank one?
+      </p>
+    </div>
+    <div class="modal-footer" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+      <button class="btn btn-secondary" id="btn-new-cancel">Cancel / Keep Editing</button>
+      <button class="btn btn-danger btn-sm" id="btn-new-discard" style="background:#fef2f2; color:#b91c1c; border-color:#fecaca;">Discard &amp; Start Fresh</button>
+      <button class="btn btn-primary btn-sm" id="btn-new-save-and-start">Save &amp; Start Fresh</button>
+    </div>
+  </dialog>
+
+  <!-- ========================================================================
+       MODAL 2: DOCUMENT HISTORY & PREVIOUS INVOICES (IndexedDB History)
+       ======================================================================== -->
+  <dialog class="app-modal" id="modal-invoices" style="max-width:720px;">
+    <div class="modal-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+        <h3 class="modal-title">Document History &amp; Previous Invoices</h3>
+      </div>
       <button class="btn btn-secondary btn-sm" id="btn-close-invoices-modal">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
-        All invoices are saved locally in your browser's IndexedDB. You can reload, duplicate, or delete any record.
+      <p style="font-size:12.5px; color:#64748b; margin-bottom:12px;">
+        Browse, filter, and reload your previous invoices, quotations, estimates, and proformas saved in your local database.
       </p>
-      <div id="saved-invoices-list" style="display:flex; flex-direction:column; gap:8px;">
+
+      <!-- Search & Filters Bar -->
+      <div class="invoices-filter-toolbar" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px; background:#f8fafc; padding:12px; border:1px solid #e2e8f0; border-radius:8px;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <div style="position:relative; flex:1;">
+            <input type="text" class="form-input" id="filter-inv-search" placeholder="Search by number, client name, or item..." style="width:100%; padding:7px 10px 7px 30px; font-size:12.5px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" style="position:absolute; left:10px; top:50%; transform:translateY(-50%);"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </div>
+          <select class="form-select" id="filter-inv-client" style="width:200px; padding:7px 10px; font-size:12px;">
+            <option value="all">All Clients</option>
+          </select>
+        </div>
+        <div class="filter-type-chips" id="filter-type-chips" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <span style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-right:4px;">Type:</span>
+          <button type="button" class="btn-filter-chip active" data-type="all">All (<span id="count-all">0</span>)</button>
+          <button type="button" class="btn-filter-chip" data-type="invoice">Invoices (<span id="count-invoice">0</span>)</button>
+          <button type="button" class="btn-filter-chip" data-type="quotation">Quotes (<span id="count-quotation">0</span>)</button>
+          <button type="button" class="btn-filter-chip" data-type="estimate">Estimates (<span id="count-estimate">0</span>)</button>
+          <button type="button" class="btn-filter-chip" data-type="proforma">Proformas (<span id="count-proforma">0</span>)</button>
+        </div>
+      </div>
+
+      <div id="saved-invoices-list" style="display:flex; flex-direction:column; gap:8px; max-height:420px; overflow-y:auto; padding-right:2px;">
         <!-- Invoices list dynamically populated -->
       </div>
     </div>
-    <div class="modal-footer">
+    <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:11.5px; color:#64748b;" id="invoices-filter-summary">Showing all documents</span>
       <button class="btn btn-secondary" id="btn-cancel-invoices-modal">Close</button>
     </div>
   </dialog>
 
   <!-- ========================================================================
-       MODAL 3: CLIENT DIRECTORY
+       MODAL 3: CLIENT DIRECTORY & HISTORY
        ======================================================================== -->
-  <dialog class="app-modal" id="modal-clients">
+  <dialog class="app-modal" id="modal-clients" style="max-width:720px;">
     <div class="modal-header">
-      <h3 class="modal-title">Client Directory</h3>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        <h3 class="modal-title">Client Directory &amp; History</h3>
+      </div>
       <button class="btn btn-secondary btn-sm" id="btn-close-clients-modal">&times;</button>
     </div>
     <div class="modal-body">
       <p style="font-size:12.5px; color:#64748b; margin-bottom:14px;">
-        Reusable clients saved in your local database for 1-click auto-fill into invoices.
+        Saved client contacts with their complete billing activity. View past estimates and invoices per client or create new documents in 1-click.
       </p>
-      <div id="clients-list" style="display:flex; flex-direction:column; gap:8px;">
-        <!-- Clients list dynamically populated -->
+      <div id="clients-list" style="display:flex; flex-direction:column; gap:10px; max-height:440px; overflow-y:auto; padding-right:2px;">
+        <!-- Clients list dynamically populated with expandable documents -->
       </div>
     </div>
     <div class="modal-footer">

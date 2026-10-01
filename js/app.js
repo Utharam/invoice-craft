@@ -469,7 +469,13 @@ function amountToWords(amount, currency = '$', format = 'international') {
     '£': { majorSingular: 'Pound', majorPlural: 'Pounds', minorSingular: 'Penny', minorPlural: 'Pence', leadMajor: false },
     'C$': { majorSingular: 'Canadian Dollar', majorPlural: 'Canadian Dollars', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
     'A$': { majorSingular: 'Australian Dollar', majorPlural: 'Australian Dollars', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
-    'AED': { majorSingular: 'Dirham', majorPlural: 'Dirhams', minorSingular: 'Fil', minorPlural: 'Fils', leadMajor: false },
+    'AED': { majorSingular: 'UAE Dirham', majorPlural: 'UAE Dirhams', minorSingular: 'Fil', minorPlural: 'Fils', leadMajor: false },
+    'SAR': { majorSingular: 'Saudi Riyal', majorPlural: 'Saudi Riyals', minorSingular: 'Halala', minorPlural: 'Halalas', leadMajor: false },
+    'BHD': { majorSingular: 'Bahraini Dinar', majorPlural: 'Bahraini Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
+    'BD': { majorSingular: 'Bahraini Dinar', majorPlural: 'Bahraini Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
+    'QAR': { majorSingular: 'Qatari Riyal', majorPlural: 'Qatari Riyals', minorSingular: 'Dirham', minorPlural: 'Dirhams', leadMajor: false },
+    'KWD': { majorSingular: 'Kuwaiti Dinar', majorPlural: 'Kuwaiti Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
+    'OMR': { majorSingular: 'Omani Rial', majorPlural: 'Omani Rials', minorSingular: 'Baisa', minorPlural: 'Baisa', leadMajor: false },
     '¥': { majorSingular: 'Yen', majorPlural: 'Yen', minorSingular: '', minorPlural: '', leadMajor: false },
     'CHF': { majorSingular: 'Swiss Franc', majorPlural: 'Swiss Francs', minorSingular: 'Rappen', minorPlural: 'Rappen', leadMajor: false }
   };
@@ -892,8 +898,19 @@ function populateFormFields() {
   document.getElementById('input-inv-title').value = currentInvoice.meta.title;
   document.getElementById('input-inv-number').value = currentInvoice.meta.number;
   document.getElementById('input-inv-date').value = currentInvoice.meta.date;
-  document.getElementById('input-inv-due').value = currentInvoice.meta.dueDate;
-  document.getElementById('select-inv-currency').value = currentInvoice.meta.currency;
+  const selectCurr = document.getElementById('select-inv-currency');
+  const customCurrWrapper = document.getElementById('custom-currency-wrapper');
+  const inputCustomCurr = document.getElementById('input-custom-currency');
+  const curVal = currentInvoice.meta.currency || '$';
+  const knownCurrs = ['$', '€', '£', '₹', 'C$', 'A$', '¥', 'CHF', 'AED', 'SAR', 'BHD', 'QAR', 'KWD', 'OMR'];
+  if (knownCurrs.includes(curVal)) {
+    if (selectCurr) selectCurr.value = curVal;
+    if (customCurrWrapper) customCurrWrapper.style.display = 'none';
+  } else {
+    if (selectCurr) selectCurr.value = 'custom';
+    if (customCurrWrapper) customCurrWrapper.style.display = 'block';
+    if (inputCustomCurr) inputCustomCurr.value = curVal;
+  }
   document.getElementById('input-inv-po').value = currentInvoice.meta.po || '';
   document.getElementById('select-inv-status').value = currentInvoice.meta.status;
   const numFmtSelect = document.getElementById('select-inv-number-format');
@@ -2484,18 +2501,42 @@ function attachFormListeners() {
   bindTextInput('input-inv-po', val => currentInvoice.meta.po = val);
 
   const selectCurrency = document.getElementById('select-inv-currency');
+  const customCurrWrapper = document.getElementById('custom-currency-wrapper');
+  const inputCustomCurr = document.getElementById('input-custom-currency');
+
   if (selectCurrency) {
     selectCurrency.addEventListener('change', (e) => {
       const newCurr = e.target.value;
       const prevCurr = currentInvoice.meta.currency;
-      currentInvoice.meta.currency = newCurr;
-      const numFmtSelect = document.getElementById('select-inv-number-format');
-      // Only auto-suggest Indian format when switching TO ₹; never clobber an
-      // explicit user choice when switching between other currencies.
-      if (newCurr === '₹' && prevCurr !== '₹') {
-        currentInvoice.meta.numberFormat = 'indian';
-        if (numFmtSelect) numFmtSelect.value = 'indian';
+
+      if (newCurr === 'custom') {
+        if (customCurrWrapper) customCurrWrapper.style.display = 'block';
+        if (inputCustomCurr) {
+          inputCustomCurr.focus();
+          const customVal = inputCustomCurr.value.trim() || 'BHD';
+          currentInvoice.meta.currency = customVal;
+        }
+      } else {
+        if (customCurrWrapper) customCurrWrapper.style.display = 'none';
+        currentInvoice.meta.currency = newCurr;
+        const numFmtSelect = document.getElementById('select-inv-number-format');
+        // Only auto-suggest Indian format when switching TO ₹; never clobber an
+        // explicit user choice when switching between other currencies.
+        if (newCurr === '₹' && prevCurr !== '₹') {
+          currentInvoice.meta.numberFormat = 'indian';
+          if (numFmtSelect) numFmtSelect.value = 'indian';
+        }
       }
+      updateSheetView();
+      renderLineItemsEditor();
+      triggerAutoSave();
+    });
+  }
+
+  if (inputCustomCurr) {
+    inputCustomCurr.addEventListener('input', (e) => {
+      const val = e.target.value.trim();
+      currentInvoice.meta.currency = val || 'CUR';
       updateSheetView();
       renderLineItemsEditor();
       triggerAutoSave();
@@ -2892,49 +2933,86 @@ function attachNavigationListeners() {
     }
   });
 
-  // New Document Button
-  document.getElementById('btn-new-invoice').addEventListener('click', async () => {
+  async function resetToFreshDocument(prefillClient = null) {
     const curType = currentInvoice.meta.docType || 'invoice';
     const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
-    if (confirm(`Start a fresh new ${cfg.name.toLowerCase()}? Make sure your current document is saved.`)) {
-      const defCompany = await getDefaultCompany();
-      currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
-      currentInvoice.id = (curType === 'invoice' ? 'inv_' : 'doc_') + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-      // Refresh dates: DEFAULT state is frozen at script load, so regenerate for a new doc.
-      currentInvoice.meta.date = new Date().toISOString().split('T')[0];
-      currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
-      currentInvoice.meta.docType = curType;
-      currentInvoice.meta.title = cfg.title;
-      if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-        currentInvoice.meta.number = generateDocumentNumber(curType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
-      } else {
-        currentInvoice.meta.number = cfg.prefix + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
-      }
-      currentInvoice.meta.status = cfg.defaultStatus;
-      currentInvoice.meta.showSignature = (curType !== 'invoice');
-      currentInvoice.notes = cfg.defaultNotes;
-      if (defCompany) {
-        currentInvoice.sender = {
-          name: defCompany.name || '',
-          email: defCompany.email || '',
-          phone: defCompany.phone || '',
-          address: defCompany.address || '',
-          taxId: defCompany.taxId || ''
-        };
-        currentInvoice.payment = defCompany.payment || '';
-        activeCompanyProfileId = defCompany.id;
-      } else {
-        currentInvoice.payment = '';
-      }
-
-      await renderCompanyProfilesSelector();
-      populateFormFields();
-      renderLineItemsEditor();
-      renderTaxesEditor();
-      updateSheetView();
-      triggerAutoSave();
+    const defCompany = await getDefaultCompany();
+    currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
+    currentInvoice.id = (curType === 'invoice' ? 'inv_' : 'doc_') + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+    currentInvoice.meta.date = new Date().toISOString().split('T')[0];
+    currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+    currentInvoice.meta.docType = curType;
+    currentInvoice.meta.title = cfg.title;
+    if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
+      currentInvoice.meta.number = generateDocumentNumber(curType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
+    } else {
+      currentInvoice.meta.number = cfg.prefix + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
     }
-  });
+    currentInvoice.meta.status = cfg.defaultStatus;
+    currentInvoice.meta.showSignature = (curType !== 'invoice');
+    currentInvoice.notes = cfg.defaultNotes;
+    if (defCompany) {
+      currentInvoice.sender = {
+        name: defCompany.name || '',
+        email: defCompany.email || '',
+        phone: defCompany.phone || '',
+        address: defCompany.address || '',
+        taxId: defCompany.taxId || ''
+      };
+      currentInvoice.payment = defCompany.payment || '';
+      activeCompanyProfileId = defCompany.id;
+    } else {
+      currentInvoice.payment = '';
+    }
+
+    if (prefillClient) {
+      currentInvoice.client = {
+        name: prefillClient.name || '',
+        email: prefillClient.email || '',
+        phone: prefillClient.phone || '',
+        address: prefillClient.address || '',
+        taxId: prefillClient.taxId || ''
+      };
+    }
+
+    await renderCompanyProfilesSelector();
+    populateFormFields();
+    renderLineItemsEditor();
+    renderTaxesEditor();
+    updateSheetView();
+    triggerAutoSave();
+  }
+
+  // New Document Button (Opens Graceful Confirmation Dialog)
+  const btnNewInvoice = document.getElementById('btn-new-invoice');
+  if (btnNewInvoice) {
+    btnNewInvoice.addEventListener('click', () => {
+      const curType = currentInvoice.meta.docType || 'invoice';
+      const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
+      const curNum = currentInvoice.meta.number || 'Current Document';
+      const titleEl = document.getElementById('new-doc-cur-title');
+      if (titleEl) titleEl.textContent = `${cfg.name} "${curNum}"`;
+      openModal('modal-confirm-new-doc');
+    });
+  }
+
+  const btnNewSaveAndStart = document.getElementById('btn-new-save-and-start');
+  if (btnNewSaveAndStart) {
+    btnNewSaveAndStart.addEventListener('click', async () => {
+      await saveInvoice(currentInvoice);
+      await updateSavedInvoicesCount();
+      closeModal('modal-confirm-new-doc');
+      await resetToFreshDocument();
+    });
+  }
+
+  const btnNewDiscard = document.getElementById('btn-new-discard');
+  if (btnNewDiscard) {
+    btnNewDiscard.addEventListener('click', async () => {
+      closeModal('modal-confirm-new-doc');
+      await resetToFreshDocument();
+    });
+  }
 
   // Save Document Button
   document.getElementById('btn-save-invoice').addEventListener('click', async () => {
@@ -3015,6 +3093,31 @@ function attachNavigationListeners() {
   document.getElementById('btn-open-invoices-modal').addEventListener('click', async () => {
     await renderSavedInvoicesList();
     openModal('modal-invoices');
+  });
+
+  const filterInvSearch = document.getElementById('filter-inv-search');
+  if (filterInvSearch) {
+    filterInvSearch.addEventListener('input', (e) => {
+      invoiceFilterState.search = e.target.value.trim();
+      renderSavedInvoicesList();
+    });
+  }
+
+  const filterInvClient = document.getElementById('filter-inv-client');
+  if (filterInvClient) {
+    filterInvClient.addEventListener('change', (e) => {
+      invoiceFilterState.client = e.target.value;
+      renderSavedInvoicesList();
+    });
+  }
+
+  document.querySelectorAll('#filter-type-chips .btn-filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#filter-type-chips .btn-filter-chip').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      invoiceFilterState.docType = btn.dataset.type;
+      renderSavedInvoicesList();
+    });
   });
 
   document.getElementById('btn-open-clients-modal').addEventListener('click', async () => {
@@ -3118,7 +3221,9 @@ function attachModalListeners() {
     { btnId: 'btn-close-privacy-modal', modalId: 'modal-privacy-notice' },
     { btnId: 'btn-cancel-privacy-modal', modalId: 'modal-privacy-notice' },
     { btnId: 'btn-close-guide-modal', modalId: 'modal-user-guide' },
-    { btnId: 'btn-got-it-guide', modalId: 'modal-user-guide' }
+    { btnId: 'btn-got-it-guide', modalId: 'modal-user-guide' },
+    { btnId: 'btn-close-new-doc-modal', modalId: 'modal-confirm-new-doc' },
+    { btnId: 'btn-new-cancel', modalId: 'modal-confirm-new-doc' }
   ];
 
   explicitButtons.forEach(({ btnId, modalId }) => {
@@ -3334,21 +3439,118 @@ async function updateSavedInvoicesCount() {
   if (counter) counter.textContent = invoices.length;
 }
 
+let invoiceFilterState = {
+  search: '',
+  docType: 'all',
+  client: 'all'
+};
+
 async function renderSavedInvoicesList() {
   const container = document.getElementById('saved-invoices-list');
   if (!container) return;
   const invoices = await getAllInvoices();
 
+  // 1. Update filter type chip counts
+  const countAll = document.getElementById('count-all');
+  const countInv = document.getElementById('count-invoice');
+  const countQt = document.getElementById('count-quotation');
+  const countEst = document.getElementById('count-estimate');
+  const countPi = document.getElementById('count-proforma');
+
+  if (countAll) countAll.textContent = invoices.length;
+  if (countInv) countInv.textContent = invoices.filter(i => (i.meta?.docType || 'invoice') === 'invoice').length;
+  if (countQt) countQt.textContent = invoices.filter(i => i.meta?.docType === 'quotation').length;
+  if (countEst) countEst.textContent = invoices.filter(i => i.meta?.docType === 'estimate').length;
+  if (countPi) countPi.textContent = invoices.filter(i => i.meta?.docType === 'proforma').length;
+
+  // 2. Populate client filter dropdown
+  const clientFilterSelect = document.getElementById('filter-inv-client');
+  if (clientFilterSelect) {
+    const prevSelected = invoiceFilterState.client;
+    const clientCounts = {};
+    invoices.forEach(i => {
+      const name = (i.client?.name || '').trim();
+      if (name) clientCounts[name] = (clientCounts[name] || 0) + 1;
+    });
+    const sortedClients = Object.keys(clientCounts).sort((a,b) => a.localeCompare(b));
+    let optionsHtml = `<option value="all">All Clients (${invoices.length})</option>`;
+    sortedClients.forEach(cName => {
+      optionsHtml += `<option value="${escapeHtml(cName)}">${escapeHtml(cName)} (${clientCounts[cName]})</option>`;
+    });
+    clientFilterSelect.innerHTML = optionsHtml;
+    if (sortedClients.includes(prevSelected) || prevSelected === 'all') {
+      clientFilterSelect.value = prevSelected;
+    } else {
+      invoiceFilterState.client = 'all';
+      clientFilterSelect.value = 'all';
+    }
+  }
+
+  // 3. Filter invoices
+  const filtered = invoices.filter(inv => {
+    const docType = inv.meta?.docType || 'invoice';
+    if (invoiceFilterState.docType !== 'all' && docType !== invoiceFilterState.docType) {
+      return false;
+    }
+    const cName = (inv.client?.name || '').trim();
+    if (invoiceFilterState.client !== 'all' && cName !== invoiceFilterState.client) {
+      return false;
+    }
+    if (invoiceFilterState.search) {
+      const q = invoiceFilterState.search.toLowerCase();
+      const num = (inv.meta?.number || '').toLowerCase();
+      const clientStr = cName.toLowerCase();
+      const emailStr = (inv.client?.email || '').toLowerCase();
+      const itemsMatch = (inv.items || []).some(it => (it.desc || '').toLowerCase().includes(q));
+      if (!num.includes(q) && !clientStr.includes(q) && !emailStr.includes(q) && !itemsMatch) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  // 4. Update summary text
+  const summaryEl = document.getElementById('invoices-filter-summary');
+  if (summaryEl) {
+    summaryEl.textContent = `Showing ${filtered.length} of ${invoices.length} document${invoices.length !== 1 ? 's' : ''}`;
+  }
+
+  // 5. Render list
   if (invoices.length === 0) {
     container.innerHTML = `
-      <div style="text-align:center; padding:24px 0; color:#94a3b8; font-size:13px;">
-        No saved invoices yet. Click "Save" in the top bar to store your first invoice!
+      <div style="text-align:center; padding:28px 0; color:#94a3b8; font-size:13px;">
+        No saved invoices or documents yet. Click "Save" in the top bar to store your first record!
       </div>
     `;
     return;
   }
 
-  container.innerHTML = invoices.map(inv => {
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div style="text-align:center; padding:24px 0; color:#94a3b8; font-size:13px;">
+        No documents match your active filter.
+        <div style="margin-top:8px;">
+          <button type="button" class="btn btn-secondary btn-xs" id="btn-reset-filters">Clear All Filters</button>
+        </div>
+      </div>
+    `;
+    const btnReset = document.getElementById('btn-reset-filters');
+    if (btnReset) {
+      btnReset.addEventListener('click', () => {
+        invoiceFilterState = { search: '', docType: 'all', client: 'all' };
+        const searchInput = document.getElementById('filter-inv-search');
+        if (searchInput) searchInput.value = '';
+        if (clientFilterSelect) clientFilterSelect.value = 'all';
+        document.querySelectorAll('#filter-type-chips .btn-filter-chip').forEach(c => {
+          c.classList.toggle('active', c.dataset.type === 'all');
+        });
+        renderSavedInvoicesList();
+      });
+    }
+    return;
+  }
+
+  container.innerHTML = filtered.map(inv => {
     const dateFormatted = inv.updatedAt ? new Date(inv.updatedAt).toLocaleDateString() : '—';
     const docType = inv.meta?.docType || 'invoice';
     const docBadge = docType !== 'invoice'
@@ -3360,15 +3562,17 @@ async function renderSavedInvoicesList() {
     return `
       <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
         <div>
-          <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center;">
+          <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
             ${escapeHtml(inv.meta.number || 'Document')}
             ${docBadge}
-            <span style="color:#94a3b8; font-weight:400; margin:0 6px;">&bull;</span>
+            <span style="color:#94a3b8; font-weight:400; margin:0 4px;">&bull;</span>
             ${escapeHtml(inv.client.name || 'Client')}
           </div>
-          <div style="font-size:11.5px; color:#64748b; margin-top:2px;">Last updated: ${escapeHtml(dateFormatted)} &bull; ${escapeHtml(inv.meta.currency || '$')}${escapeHtml(invTotalText)}</div>
+          <div style="font-size:11.5px; color:#64748b; margin-top:2px;">
+            Updated: ${escapeHtml(dateFormatted)} &bull; ${escapeHtml(inv.meta.currency || '$')}${escapeHtml(invTotalText)}
+          </div>
         </div>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:6px;">
           <button class="btn btn-primary btn-sm btn-load-inv" data-id="${safeInvId}">Load</button>
           <button class="btn btn-secondary btn-sm btn-dup-inv" data-id="${safeInvId}">Duplicate</button>
           <button class="btn btn-danger btn-sm btn-icon btn-del-inv" data-id="${safeInvId}" title="Delete">
@@ -3436,6 +3640,7 @@ async function renderClientsList() {
   const container = document.getElementById('clients-list');
   if (!container) return;
   const clients = await getAllClients();
+  const allInvoices = await getAllInvoices();
 
   if (clients.length === 0) {
     container.innerHTML = `
@@ -3446,25 +3651,110 @@ async function renderClientsList() {
     return;
   }
 
-  container.innerHTML = clients.map(c => `
-    <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
-      <div>
-        <div style="font-size:13px; font-weight:700; color:#0f172a;">${escapeHtml(c.name)}</div>
-        <div style="font-size:11.5px; color:#64748b;">${escapeHtml(c.email || '')} ${c.phone ? ' | ' + escapeHtml(c.phone) : ''}</div>
-      </div>
-      <div style="display:flex; gap:8px;">
-        <button class="btn btn-primary btn-sm btn-select-client" data-id="${escapeHtml(c.id)}">Use Client</button>
-        <button class="btn btn-danger btn-sm btn-icon btn-del-client" data-id="${escapeHtml(c.id)}">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-        </button>
-      </div>
-    </div>
-  `).join('');
+  container.innerHTML = clients.map(c => {
+    const cNameClean = (c.name || '').trim().toLowerCase();
+    const clientDocs = allInvoices.filter(inv => {
+      const invCName = (inv.client?.name || '').trim().toLowerCase();
+      return (invCName && invCName === cNameClean) || (inv.client?.id === c.id);
+    });
 
+    const totalBilled = clientDocs.reduce((sum, inv) => sum + calculateTotal(inv), 0);
+    const currSym = clientDocs[0]?.meta?.currency || currentInvoice.meta?.currency || '$';
+    const totalBilledText = formatMoney(totalBilled, currSym);
+
+    const docCountLabel = clientDocs.length === 0
+      ? `<span style="font-size:11px; color:#94a3b8;">No documents yet</span>`
+      : `<span style="font-size:11px; font-weight:600; color:#0369a1; background:#e0f2fe; padding:2px 8px; border-radius:10px;">${clientDocs.length} doc${clientDocs.length > 1 ? 's' : ''} &bull; Total: ${totalBilledText}</span>`;
+
+    const docsDrawerHtml = clientDocs.length > 0 ? `
+      <div class="client-docs-drawer" id="client-drawer-${escapeHtml(c.id)}" style="display:none;">
+        <div style="font-size:11px; font-weight:700; color:#475569; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.4px;">
+          Previous Documents for ${escapeHtml(c.name)}:
+        </div>
+        ${clientDocs.map(doc => {
+          const docType = doc.meta?.docType || 'invoice';
+          const docTotal = formatMoney(calculateTotal(doc), doc.meta?.currency || '$');
+          const docDate = doc.updatedAt ? new Date(doc.updatedAt).toLocaleDateString() : '';
+          return `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:4px;">
+              <div>
+                <span style="font-size:12px; font-weight:700; color:#0f172a;">${escapeHtml(doc.meta?.number || 'Doc')}</span>
+                <span style="font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px; background:#e0f2fe; color:#0369a1; text-transform:uppercase; margin-left:4px;">${escapeHtml(docType)}</span>
+                <span style="font-size:11px; color:#64748b; margin-left:6px;">${docDate} &bull; ${docTotal}</span>
+              </div>
+              <button class="btn btn-primary btn-xs btn-load-client-subdoc" data-doc-id="${escapeHtml(doc.id)}">Load</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    ` : '';
+
+    return `
+      <div style="padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <div>
+            <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; gap:8px;">
+              ${escapeHtml(c.name)}
+              ${docCountLabel}
+            </div>
+            <div style="font-size:11.5px; color:#64748b; margin-top:3px;">
+              ${escapeHtml(c.email || 'No email')} ${c.phone ? ' &bull; ' + escapeHtml(c.phone) : ''} ${c.taxId ? ' &bull; Tax: ' + escapeHtml(c.taxId) : ''}
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            ${clientDocs.length > 0 ? `<button class="btn btn-secondary btn-sm btn-toggle-client-history" data-client-id="${escapeHtml(c.id)}">History (${clientDocs.length})</button>` : ''}
+            <button class="btn btn-primary btn-sm btn-select-client" data-id="${escapeHtml(c.id)}" title="Fill this client into current document">Use Client</button>
+            <button class="btn btn-secondary btn-sm btn-new-for-client" data-id="${escapeHtml(c.id)}" title="Start fresh document for this client">+ New Doc</button>
+            <button class="btn btn-danger btn-sm btn-icon btn-del-client" data-id="${escapeHtml(c.id)}" title="Delete client">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+        </div>
+        ${docsDrawerHtml}
+      </div>
+    `;
+  }).join('');
+
+  // Bind History toggle buttons
+  container.querySelectorAll('.btn-toggle-client-history').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const drawer = document.getElementById(`client-drawer-${btn.dataset.clientId}`);
+      if (drawer) {
+        const isHidden = drawer.style.display === 'none';
+        drawer.style.display = isHidden ? 'block' : 'none';
+        btn.textContent = isHidden ? 'Hide History' : `History (${drawer.querySelectorAll('.btn-load-client-subdoc').length})`;
+      }
+    });
+  });
+
+  // Bind loading a sub-document from client history
+  container.querySelectorAll('.btn-load-client-subdoc').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const inv = await getInvoice(btn.dataset.docId);
+      if (inv) {
+        normalizeInvoice(inv);
+        currentInvoice = JSON.parse(JSON.stringify(inv));
+        if (inv.sender && inv.sender.name) {
+          try {
+            const allComps = await getAllCompanies();
+            const match = allComps.find(comp => comp.name === inv.sender.name);
+            if (match) activeCompanyProfileId = match.id;
+          } catch (e) {}
+        }
+        populateFormFields();
+        renderLineItemsEditor();
+        renderTaxesEditor();
+        updateSheetView();
+        triggerAutoSave();
+        closeModal('modal-clients');
+      }
+    });
+  });
+
+  // Bind Use Client
   container.querySelectorAll('.btn-select-client').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const clientsAll = await getAllClients();
-      const match = clientsAll.find(c => c.id === btn.dataset.id);
+      const match = clients.find(c => c.id === btn.dataset.id);
       if (match) {
         currentInvoice.client = {
           name: match.name,
@@ -3481,10 +3771,24 @@ async function renderClientsList() {
     });
   });
 
+  // Bind + New Doc for Client
+  container.querySelectorAll('.btn-new-for-client').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const match = clients.find(c => c.id === btn.dataset.id);
+      if (match) {
+        closeModal('modal-clients');
+        await resetToFreshDocument(match);
+      }
+    });
+  });
+
+  // Bind Delete Client
   container.querySelectorAll('.btn-del-client').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await deleteClient(btn.dataset.id);
-      await renderClientsList();
+      if (confirm('Permanently delete this client from your address book?')) {
+        await deleteClient(btn.dataset.id);
+        await renderClientsList();
+      }
     });
   });
 }
