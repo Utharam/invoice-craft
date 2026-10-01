@@ -1533,93 +1533,181 @@
   </dialog>
 
   <!-- ========================================================================
-       MODAL 8: USER GUIDE & README (First-Time User Walkthrough)
+       MODAL 8: USER GUIDE & README (In-App Walkthrough & Reference)
        ======================================================================== -->
-  <dialog class="app-modal" id="modal-user-guide" style="max-width:720px;">
+  <dialog class="app-modal" id="modal-user-guide" style="max-width:760px;">
     <div class="modal-header">
-      <div style="display:flex; align-items:center; gap:8px;">
-        <div style="width:30px; height:30px; border-radius:50%; background:#eff6ff; color:#2563eb; display:flex; align-items:center; justify-content:center;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="width:34px; height:34px; border-radius:50%; background:#eff6ff; color:#2563eb; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         </div>
         <div>
-          <h3 class="modal-title" style="margin:0; font-size:15px;">InvoiceCraft Quick Start &amp; User Guide</h3>
-          <span style="font-size:11px; color:#64748b;">A fast overview of tools, workflows, and keyboard shortcuts</span>
+          <h3 class="modal-title" style="margin:0; font-size:16px;">InvoiceCraft User Guide &amp; Feature Manual</h3>
+          <span style="font-size:11.5px; color:#64748b;">Complete guide to previous invoices, custom currencies, client billing, and vector PDF export</span>
         </div>
       </div>
       <button class="btn btn-secondary btn-sm" id="btn-close-guide-modal">&times;</button>
     </div>
-    <div class="modal-body" style="padding:20px 24px;">
+    <div class="modal-body" style="padding:22px 26px; display:flex; flex-direction:column; gap:20px;">
       
-      <!-- 3-Step Workflow -->
-      <div style="margin-bottom:20px;">
-        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:10px;">Quick-Start Workflow</h4>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px;">
+      <!-- 1. 3-Step Quick Start Workflow -->
+      <div>
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 10px 0; display:flex; align-items:center; gap:6px;">
+          <span>⚡</span> Quick-Start Workflow
+        </h4>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px;">
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
-            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">1. Type &amp; Model</div>
+            <div style="font-size:11.5px; font-weight:700; color:#2563eb; margin-bottom:4px;">1. Type &amp; Design Model</div>
             <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
-              Choose <strong>Invoice, Quotation, Estimate, or Proforma</strong>. Select from 10 Swiss, Minimalist, or Corporate architectural layouts.
+              Choose <strong>Invoice, Quotation, Estimate, or Proforma</strong>. Pick from 10 architectural layouts (Modern Swiss, Minimalist Mono, Corporate, Neobrutalist, Warm Studio, etc.).
             </p>
           </div>
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
-            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">2. Brand &amp; Details</div>
+            <div style="font-size:11.5px; font-weight:700; color:#2563eb; margin-bottom:4px;">2. Brand, Currency &amp; Client</div>
             <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
-              Open <strong>Logo Studio</strong> to upload a logo, craft a custom monogram, or pick vector icons. Set dates, currency, &amp; comma styles.
+              Upload a logo or use the <strong>Logo Studio</strong>. Pick your currency (USD, EUR, Middle East presets or Custom Currency) and set your client contact details.
             </p>
           </div>
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px;">
-            <div style="font-size:11px; font-weight:700; color:#2563eb; margin-bottom:4px;">3. Items &amp; Taxes</div>
+            <div style="font-size:11.5px; font-weight:700; color:#2563eb; margin-bottom:4px;">3. Items, Taxes &amp; Print</div>
             <p style="font-size:11.5px; color:#475569; margin:0; line-height:1.45;">
-              Set individual tax rates per item (0% Exempt, 5%, 12%, 18% GST). Configure official multi-leg splits (e.g. 50% CGST + 50% SGST).
+              Add line items, apply item-level tax rates or multi-leg splits (e.g. CGST + SGST), check the live A4 page fit badge, and click <strong>Print / Save PDF</strong>.
             </p>
           </div>
         </div>
       </div>
 
-      <!-- Feature Highlights -->
-      <div style="margin-bottom:20px;">
-        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin-bottom:10px;">Key Capabilities</h4>
+      <!-- 2. Document History & Previous Invoices -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #2563eb; border-radius:8px; padding:14px 16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 6px 0; display:flex; align-items:center; gap:6px;">
+          <span>📂</span> Previous Invoices &amp; Document History
+        </h4>
+        <p style="font-size:12px; color:#475569; margin:0 0 10px 0; line-height:1.5;">
+          Click the <strong>Previous Invoices</strong> button in the top navigation bar to open your local document archive:
+        </p>
+        <ul style="font-size:11.5px; color:#334155; margin:0; padding-left:18px; line-height:1.6;">
+          <li><strong>Real-Time Search:</strong> Type in the search box to filter instantly by <em>Invoice Number</em>, <em>Client Name</em>, or any <em>Line Item Description</em> (e.g. searching "audit" or "hosting" immediately finds invoices containing that service).</li>
+          <li><strong>Document Type Chips:</strong> Quick-filter by document type &mdash; <strong>All</strong>, <strong>Invoices</strong>, <strong>Quotes</strong>, <strong>Estimates</strong>, or <strong>Proformas</strong> &mdash; with real-time count badges.</li>
+          <li><strong>Filter by Client:</strong> Use the client dropdown to isolate all documents issued to an individual client.</li>
+          <li><strong>Action Controls:</strong>
+            <ul style="margin:4px 0 0 0; padding-left:16px;">
+              <li><strong>Load:</strong> Instantly opens the document onto the live canvas for editing or reprinting.</li>
+              <li><strong>Duplicate:</strong> Clones line items, client details, and tax settings into a fresh document with a newly assigned sequence number.</li>
+              <li><strong>Delete:</strong> Permanently removes the invoice from local IndexedDB storage.</li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 3. Global, Middle Eastern & Custom Currencies -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #059669; border-radius:8px; padding:14px 16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 6px 0; display:flex; align-items:center; gap:6px;">
+          <span>🌍</span> Global, Middle Eastern &amp; Custom Currencies
+        </h4>
+        <p style="font-size:12px; color:#475569; margin:0 0 10px 0; line-height:1.5;">
+          Configure currency in <strong>Module 3 (Invoice Details)</strong> in the left editor sidebar:
+        </p>
+        <ul style="font-size:11.5px; color:#334155; margin:0; padding-left:18px; line-height:1.6;">
+          <li><strong>Middle Eastern Presets:</strong> Built-in support with authentic symbol rendering and legal fractional units:
+            <ul style="margin:4px 0; padding-left:16px;">
+              <li><strong>BHD (Bahraini Dinar):</strong> <code>BD / د.ب</code> with 3-decimal precision and <em>Fils</em> fractional units.</li>
+              <li><strong>SAR (Saudi Riyal):</strong> <code>SR / ر.س</code> with <em>Halalas</em>.</li>
+              <li><strong>AED (UAE Dirham):</strong> <code>AED / د.إ</code> with <em>Fils</em>.</li>
+              <li><strong>QAR (Qatari Riyal):</strong> <code>QR / ر.ق</code> with <em>Dirhams</em>.</li>
+              <li><strong>KWD (Kuwaiti Dinar):</strong> <code>KD / د.ك</code> with 3-decimal precision and <em>Fils</em>.</li>
+              <li><strong>OMR (Omani Rial):</strong> <code>RO / ر.ع</code> with 3-decimal precision and <em>Baisa</em>.</li>
+            </ul>
+          </li>
+          <li><strong>Global Presets:</strong> USD ($), EUR (€), GBP (£), INR (₹), CAD (C$), AUD (A$), JPY (¥), and CHF.</li>
+          <li><strong>Custom Currency:</strong> Select <strong>"Custom Currency..."</strong> at the bottom of the dropdown. Enter any ISO code or symbol (e.g. <code>SGD</code>, <code>NZD</code>, <code>ZAR</code>, <code>kr</code>, <code>PHP</code>) to use anywhere in the world.</li>
+          <li><strong>Automated Legal Words:</strong> The total amount is automatically converted to official legal words format (e.g. <em>"Bahraini Dinars and ... Fils Only"</em>, <em>"Saudi Riyals and ... Halalas Only"</em>, <em>"Rupees and ... Paise Only"</em>, <em>"Dollars and ... Cents Only"</em>).</li>
+        </ul>
+      </div>
+
+      <!-- 4. Client Directory & Client-Wise Invoicing -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #7c3aed; border-radius:8px; padding:14px 16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 6px 0; display:flex; align-items:center; gap:6px;">
+          <span>👥</span> Client Directory &amp; Invoices Under Clients
+        </h4>
+        <p style="font-size:12px; color:#475569; margin:0 0 10px 0; line-height:1.5;">
+          Click the <strong>Clients</strong> button in the top navigation bar to open your client vault:
+        </p>
+        <ul style="font-size:11.5px; color:#334155; margin:0; padding-left:18px; line-height:1.6;">
+          <li><strong>Address Book:</strong> Stores client contacts with business name, billing address, email, phone number, and Tax ID / VAT number.</li>
+          <li><strong>Lifetime Billed Revenue Badge:</strong> Every client card automatically tallies and displays their cumulative billed total and document count (e.g. <code>Billed: $14,250.00 &bull; 3 docs</code>).</li>
+          <li><strong>Expandable Invoices Drawer:</strong> Click <strong>"View Invoices (N)"</strong> on any client card to unfold all past invoices, estimates, and quotes issued to that client.</li>
+          <li><strong>1-Click Document Load:</strong> Click <strong>"Load"</strong> next to any document in the client drawer to open it directly into the editor.</li>
+          <li><strong>1-Click "+ New Doc":</strong> Click the <strong>"+ New Doc"</strong> button on any client card to immediately start a fresh invoice with that client's contact and billing details pre-filled.</li>
+        </ul>
+      </div>
+
+      <!-- 5. Document Protection & New Document Flow -->
+      <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #d97706; border-radius:8px; padding:14px 16px;">
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 6px 0; display:flex; align-items:center; gap:6px;">
+          <span>🛡️</span> Document Protection &amp; "New Document" Flow
+        </h4>
+        <p style="font-size:12px; color:#475569; margin:0 0 8px 0; line-height:1.5;">
+          When you click <strong>+ New</strong> in the top navigation bar while working on an invoice, InvoiceCraft automatically protects your unsaved work:
+        </p>
+        <ul style="font-size:11.5px; color:#334155; margin:0; padding-left:18px; line-height:1.6;">
+          <li><strong>Save &amp; Start Fresh:</strong> Automatically saves your active document to local IndexedDB, advances your continuous sequential invoice counter, and opens a clean canvas.</li>
+          <li><strong>Discard &amp; Start Fresh:</strong> Clears the canvas immediately for a fresh start without saving the current edits.</li>
+          <li><strong>Cancel / Keep Editing:</strong> Dismisses the dialog and keeps your current invoice editing session intact.</li>
+        </ul>
+      </div>
+
+      <!-- 6. Key Capabilities Grid -->
+      <div>
+        <h4 style="font-size:13px; font-weight:700; color:#0f172a; margin:0 0 10px 0;">Key Capabilities &amp; Smart Engines</h4>
         <div style="display:flex; flex-direction:column; gap:8px;">
           <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
-            <span style="font-weight:700; color:#059669; min-width:145px;">Continuous Numbering:</span>
-            <span>Click the <strong>Numbering Engine</strong> button next to Invoice # to configure auto-incrementing patterns (<code>{PREFIX}/{FY}/{COUNTER}</code>), starting counter offsets (e.g. resume from 576), and year resets. Use <strong>Next Seq #</strong> for a one-click sequential refresh.</span>
+            <span style="font-weight:700; color:#059669; min-width:150px;">Continuous Numbering:</span>
+            <span>Click <strong>Numbering Engine</strong> next to Invoice # to configure auto-incrementing patterns (<code>{PREFIX}/{FY}/{COUNTER}</code>), starting counter offsets (e.g. resume from 576), and financial year resets. Use <strong>Next Seq #</strong> for a one-click sequence bump.</span>
           </div>
           <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
-            <span style="font-weight:700; color:#059669; min-width:145px;">Comma Formatting:</span>
+            <span style="font-weight:700; color:#059669; min-width:150px;">Multi-Leg Tax Splits:</span>
+            <span>Configure itemized tax legs (e.g. 50% CGST + 50% SGST, or State + County Tax) with an optional <strong>Compound Tax Toggle</strong> (tax-on-tax).</span>
+          </div>
+          <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
+            <span style="font-weight:700; color:#059669; min-width:150px;">Comma Formatting:</span>
             <span>Toggle between <strong>International</strong> (<code>1,234,567.89</code>) and <strong>Indian Lakhs/Crores</strong> (<code>12,34,567.89</code>) in Module 3.</span>
           </div>
           <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
-            <span style="font-weight:700; color:#059669; min-width:145px;">Multiple Companies:</span>
-            <span>Manage 3, 5, or 10+ business entities. Switch companies with 1 click using the top navbar or sender module.</span>
+            <span style="font-weight:700; color:#059669; min-width:150px;">Multiple Companies:</span>
+            <span>Switch between different business entities with 1 click using the top navbar or sender module.</span>
           </div>
           <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
-            <span style="font-weight:700; color:#059669; min-width:145px;">Quotation Conversion:</span>
-            <span>Convert approved Estimates or Quotations into final Tax Invoices with a single click.</span>
+            <span style="font-weight:700; color:#059669; min-width:150px;">Quote Conversion:</span>
+            <span>Convert approved Quotations or Estimates into final Tax Invoices with a single click.</span>
           </div>
           <div style="display:flex; gap:10px; font-size:12px; color:#334155;">
-            <span style="font-weight:700; color:#059669; min-width:145px;">Bank &amp; Tax Guard:</span>
-            <span>If you leave Bank Details or Tax ID blank, InvoiceCraft automatically optimizes the layout to cleanly omit empty boxes.</span>
+            <span style="font-weight:700; color:#059669; min-width:150px;">Blank Field Guard:</span>
+            <span>Leaving Bank Details or Tax ID blank cleanly omits empty boxes from the final invoice.</span>
           </div>
         </div>
       </div>
 
-      <!-- Vector Print / PDF Export -->
-      <div style="background:#f1f5f9; border-radius:8px; padding:12px 14px; margin-bottom:16px;">
-        <div style="font-size:12px; font-weight:700; color:#0f172a; margin-bottom:4px;">Print &amp; Vector PDF Export</div>
+      <!-- 7. Vector Print & PDF Export -->
+      <div style="background:#f1f5f9; border-radius:8px; padding:12px 14px;">
+        <div style="font-size:12px; font-weight:700; color:#0f172a; margin-bottom:4px; display:flex; align-items:center; gap:6px;">
+          <span>🖨️</span> Print &amp; Vector PDF Export
+        </div>
         <p style="font-size:11.5px; color:#475569; margin:0 0 6px 0; line-height:1.45;">
           Click <strong>Print / Save PDF</strong> (or press <code>Ctrl+P</code>) to export:
         </p>
         <ul style="font-size:11.5px; color:#475569; margin:0; padding-left:18px; line-height:1.45;">
-          <li>Destination: <strong>Save as PDF</strong> (generates a 100% selectable, crystal-sharp vector PDF)</li>
+          <li>Destination: <strong>Save as PDF</strong> (produces 100% crisp vector text, selectable and searchable).</li>
           <li>Optimized layout guarantees a <strong>clean 1-page fit</strong> with zero browser headers or URL watermarks.</li>
+          <li>The live canvas status badge displays real-time page metrics (<code>A4: 1 Page</code> / <code>A4: 2 Pages</code>) to keep you informed before printing.</li>
         </ul>
       </div>
 
-      <!-- Keyboard Shortcuts -->
-      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:11.5px; color:#64748b;">
-        <span style="font-weight:600; color:#334155;">Keyboard Shortcuts:</span>
-        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+B</kbd> Toggle Sidebar
-        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+S</kbd> Save to IndexedDB
-        <kbd style="background:#ffffff; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+P</kbd> Print / Save PDF
+      <!-- 8. Keyboard Shortcuts -->
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:11.5px; color:#64748b; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px;">
+        <span style="font-weight:700; color:#334155;">Keyboard Shortcuts:</span>
+        <kbd style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+B</kbd> Toggle Sidebar
+        <kbd style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+S</kbd> Save to IndexedDB
+        <kbd style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:4px; padding:2px 6px; font-family:'JetBrains Mono',monospace;">Ctrl+P</kbd> Print / Save PDF
       </div>
 
     </div>

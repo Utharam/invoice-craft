@@ -1306,29 +1306,54 @@ function normalizeInvoice(inv) {
   if (inv.meta.showSignature === undefined) {
     inv.meta.showSignature = (inv.meta.docType !== 'invoice');
   }
+  if (!inv.meta.number) {
+    inv.meta.number = (DOC_TYPES[inv.meta.docType].prefix || 'INV-') + new Date().getFullYear() + '-001';
+  }
+  if (!inv.meta.currency) inv.meta.currency = '$';
+  if (!inv.sender) inv.sender = {};
+  if (!inv.client) inv.client = {};
+  if (inv.payment === undefined || inv.payment === null) inv.payment = '';
+  if (inv.notes === undefined || inv.notes === null) inv.notes = '';
+  if (inv.accentColor === undefined || inv.accentColor === null) inv.accentColor = '#2563eb';
+  if (inv.font === undefined || inv.font === null) inv.font = "'Inter', sans-serif";
+  if (!inv.template) inv.template = 'modern-swiss';
   if (!inv.logo) inv.logo = { dataUri: null, width: 180, align: 'left', layout: 'left' };
   if (!inv.logo.layout) inv.logo.layout = 'left';
+  if (!inv.logo.align) inv.logo.align = 'left';
+  if (inv.logo.width === undefined || inv.logo.width === null || isNaN(parseFloat(inv.logo.width))) {
+    inv.logo.width = 180;
+  }
   if (!Array.isArray(inv.items)) inv.items = [];
+  // Drop malformed entries so a partially corrupted backup cannot break rendering.
+  inv.items = inv.items.filter(item => item && typeof item === 'object');
   inv.items.forEach(item => {
     if (item.taxRate === undefined || item.taxRate === null) {
       item.taxRate = 18;
     } else {
       item.taxRate = clampNum(item.taxRate, 0, 100, 0);
     }
-    if (item.qty !== undefined && item.qty !== null) {
+    if (item.qty === undefined || item.qty === null) {
+      item.qty = 0;
+    } else {
       item.qty = clampNum(item.qty, 0, 1000000, 0);
     }
-    if (item.rate !== undefined && item.rate !== null) {
+    if (item.rate === undefined || item.rate === null) {
+      item.rate = 0;
+    } else {
       item.rate = clampNum(item.rate, 0, 1000000000, 0);
     }
+    // Coerce to string: the sheet renderer calls .trim()/.toLowerCase() on these.
     if (item.hsn === undefined || item.hsn === null) {
       item.hsn = '';
+    } else if (typeof item.hsn !== 'string') {
+      item.hsn = String(item.hsn);
     }
     if (item.discount === undefined || item.discount === null) {
       item.discount = 0;
     } else {
       item.discount = clampNum(item.discount, 0, 100, 0);
     }
+    if (typeof item.description !== 'string') item.description = '';
   });
 
   if (!Array.isArray(inv.taxes)) {
@@ -1337,12 +1362,15 @@ function normalizeInvoice(inv) {
       { id: 'tax_2', name: 'SGST', ratio: 50 }
     ];
   } else {
+    inv.taxes = inv.taxes.filter(t => t && typeof t === 'object');
     inv.taxes.forEach(t => {
+      if (typeof t.name !== 'string') t.name = '';
       if (t.ratio === undefined && t.rate !== undefined) {
         t.ratio = parseFloat(t.rate) || 50;
       } else if (t.ratio === undefined) {
         t.ratio = 50;
       }
+      t.ratio = clampNum(t.ratio, 0, 100, 50);
     });
   }
 
@@ -1526,6 +1554,53 @@ function formatFinancialYear(d) {
   }
 }
 
+function resolvePeriodKey(date, resetPeriod) {
+  if (resetPeriod === 'financial_year') return formatFinancialYear(date);
+  if (resetPeriod === 'calendar_year') return date.getFullYear().toString();
+  if (resetPeriod === 'monthly') return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return 'continuous';
+}
+
+/**
+ * Rolls the counter over when the configured reset period has changed and
+ * persists the new period key. Kept separate from generateDocumentNumber so
+ * that read-only previews (badges, modal live preview, save-time comparison)
+ * never mutate the counter or write to IndexedDB.
+ * Returns true when a rollover actually occurred.
+ */
+async function syncNumberingPeriod(config) {
+  if (!config || config.mode === 'manual') return false;
+  const resetPeriod = config.resetPeriod || 'financial_year';
+  const currentPeriodKey = resolvePeriodKey(new Date(), resetPeriod);
+
+  if (config.lastPeriodKey === currentPeriodKey) return false;
+
+  if (resetPeriod !== 'never' && config.lastPeriodKey) {
+    config.counter = parseInt(config.startingCounter, 10) || 1;
+    config.lastPeriodKey = currentPeriodKey;
+    config.updatedAt = Date.now();
+    try {
+      await saveNumberingConfig(config);
+    } catch (e) {
+      console.warn('Could not persist numbering period rollover:', e);
+    }
+    return true;
+  }
+
+  // First run for this config: only stamp the period key, never reset the counter.
+  config.lastPeriodKey = currentPeriodKey;
+  try {
+    await saveNumberingConfig(config);
+  } catch (e) {
+    console.warn('Could not persist numbering period key:', e);
+  }
+  return false;
+}
+
+/**
+ * Pure formatter: builds a document number from a config snapshot.
+ * Performs no I/O and mutates nothing, so it is safe for live previews.
+ */
 function generateDocumentNumber(docType, dateStr, config, overrideCounter = null) {
   if (!config) config = DEFAULT_NUMBERING_CONFIG;
   if (config.mode === 'manual' && overrideCounter === null) {
@@ -1534,28 +1609,6 @@ function generateDocumentNumber(docType, dateStr, config, overrideCounter = null
 
   const d = dateStr ? new Date(dateStr) : new Date();
   const date = (!isNaN(d.getTime())) ? d : new Date();
-
-  // Determine current period key for reset
-  let currentPeriodKey = '';
-  if (config.resetPeriod === 'financial_year') {
-    currentPeriodKey = formatFinancialYear(date);
-  } else if (config.resetPeriod === 'calendar_year') {
-    currentPeriodKey = date.getFullYear().toString();
-  } else if (config.resetPeriod === 'monthly') {
-    currentPeriodKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-  } else {
-    currentPeriodKey = 'continuous';
-  }
-
-  // Check if period reset needed
-  if (config.resetPeriod !== 'never' && config.lastPeriodKey && config.lastPeriodKey !== currentPeriodKey) {
-    config.counter = parseInt(config.startingCounter, 10) || 1;
-    config.lastPeriodKey = currentPeriodKey;
-    saveNumberingConfig(config);
-  } else if (!config.lastPeriodKey) {
-    config.lastPeriodKey = currentPeriodKey;
-    saveNumberingConfig(config);
-  }
 
   // Determine Prefix for docType
   let prefix = config.prefixInvoice || 'INV';
@@ -1721,6 +1774,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     // Set initial invoice number from numbering engine if auto
     if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
+      await syncNumberingPeriod(currentNumberingConfig);
       currentInvoice.meta.number = generateDocumentNumber(
         currentInvoice.meta.docType || 'invoice',
         currentInvoice.meta.date,
@@ -1903,6 +1957,7 @@ function populateFormFields() {
   document.getElementById('input-inv-title').value = currentInvoice.meta.title;
   document.getElementById('input-inv-number').value = currentInvoice.meta.number;
   document.getElementById('input-inv-date').value = currentInvoice.meta.date;
+  document.getElementById('input-inv-due').value = currentInvoice.meta.dueDate || '';
   const selectCurr = document.getElementById('select-inv-currency');
   const customCurrWrapper = document.getElementById('custom-currency-wrapper');
   const inputCustomCurr = document.getElementById('input-custom-currency');
@@ -1983,7 +2038,7 @@ function syncStatusDropdown(docType, currentStatus) {
   }
 }
 
-function switchDocumentType(newType) {
+async function switchDocumentType(newType) {
   if (!DOC_TYPES[newType]) return;
   const oldType = currentInvoice.meta.docType || 'invoice';
   const oldCfg = DOC_TYPES[oldType] || DOC_TYPES.invoice;
@@ -1998,6 +2053,7 @@ function switchDocumentType(newType) {
 
   // Update document number from numbering engine if auto, or standard prefix replacement
   if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
+    await syncNumberingPeriod(currentNumberingConfig);
     currentInvoice.meta.number = generateDocumentNumber(newType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
   } else {
     const knownPrefixes = ['INV-', 'QT-', 'EST-', 'PI-'];
@@ -2035,7 +2091,7 @@ function switchDocumentType(newType) {
   triggerAutoSave();
 }
 
-function convertToInvoice() {
+async function convertToInvoice() {
   const oldType = currentInvoice.meta.docType || 'quotation';
   const oldNumber = currentInvoice.meta.number || 'QT-001';
   const curDocName = (DOC_TYPES[oldType] || DOC_TYPES.quotation).name;
@@ -2045,6 +2101,7 @@ function convertToInvoice() {
 
   // Replace number using Numbering Engine or standard prefix
   if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
+    await syncNumberingPeriod(currentNumberingConfig);
     currentInvoice.meta.number = generateDocumentNumber('invoice', currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
   } else {
     const knownPrefixes = ['QT-', 'EST-', 'PI-'];
@@ -2503,7 +2560,7 @@ function renderTaxesEditor() {
       <div></div>
     </div>
   ` + currentInvoice.taxes.map((tax, index) => {
-    const ratioVal = tax.ratio !== undefined ? tax.ratio : (tax.rate !== undefined ? tax.rate : 50);
+    const ratioVal = clampNum(tax.ratio !== undefined ? tax.ratio : tax.rate, 0, 100, 50);
     return `
       <div class="tax-row" data-index="${index}" style="display:grid; grid-template-columns: 1fr 100px 32px; gap:8px; align-items:center; margin-bottom:8px;">
         <input type="text" class="form-input tax-name-input" value="${escapeHtml(tax.name)}" placeholder="Tax Leg (e.g. CGST, SGST, VAT)">
@@ -3444,11 +3501,11 @@ function attachFormListeners() {
 
   // Section 1 Document Type Selection Cards
   document.querySelectorAll('#doc-type-cards-grid .doc-type-card').forEach(card => {
-    card.addEventListener('click', (e) => {
+    card.addEventListener('click', async (e) => {
       e.preventDefault();
       const type = card.dataset.type;
       if (type && type !== currentInvoice.meta.docType) {
-        switchDocumentType(type);
+        await switchDocumentType(type);
       }
     });
   });
@@ -3456,9 +3513,9 @@ function attachFormListeners() {
   // Section 1 Quick Convert Button in Hint Banner
   const btnQuickConvert = document.getElementById('btn-quick-convert-banner');
   if (btnQuickConvert) {
-    btnQuickConvert.addEventListener('click', (e) => {
+    btnQuickConvert.addEventListener('click', async (e) => {
       e.preventDefault();
-      convertToInvoice();
+      await convertToInvoice();
     });
   }
 
@@ -3466,11 +3523,11 @@ function attachFormListeners() {
   // #doc-type-cards-grid cards. Kept as no-op guard for forward-compat.)
   if (document.querySelector('#doc-type-switcher')) {
     document.querySelectorAll('#doc-type-switcher .btn-doc-type').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.preventDefault();
         const type = btn.dataset.type;
         if (type && type !== currentInvoice.meta.docType) {
-          switchDocumentType(type);
+          await switchDocumentType(type);
         }
       });
     });
@@ -3479,11 +3536,11 @@ function attachFormListeners() {
   // Convert Quotation / Estimate to Invoice Button
   const btnConvert = document.getElementById('btn-convert-quote');
   if (btnConvert) {
-    btnConvert.addEventListener('click', (e) => {
+    btnConvert.addEventListener('click', async (e) => {
       e.preventDefault();
       const curDoc = (DOC_TYPES[currentInvoice.meta.docType] || DOC_TYPES.quotation).name;
       if (confirm(`Convert this ${curDoc} into a finalized Invoice? All line items, rates, taxes, and client details will be preserved.`)) {
-        convertToInvoice();
+        await convertToInvoice();
       }
     });
   }
@@ -3902,6 +3959,62 @@ function bindTextInput(elemId, callback) {
 // ============================================================================
 // 10. NAVIGATION, SIDEBAR COLLAPSE, MODALS & BACKUP
 // ============================================================================
+async function resetToFreshDocument(prefillClient = null) {
+  const curType = currentInvoice.meta.docType || 'invoice';
+  const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
+  let defCompany = null;
+  try {
+    defCompany = await getDefaultCompany();
+  } catch (e) {
+    console.warn('Default company lookup failed while starting a new document:', e);
+  }
+  currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
+  currentInvoice.id = (curType === 'invoice' ? 'inv_' : 'doc_') + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  currentInvoice.meta.date = new Date().toISOString().split('T')[0];
+  currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+  currentInvoice.meta.docType = curType;
+  currentInvoice.meta.title = cfg.title;
+  if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
+    await syncNumberingPeriod(currentNumberingConfig);
+    currentInvoice.meta.number = generateDocumentNumber(curType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
+  } else {
+    currentInvoice.meta.number = cfg.prefix + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
+  }
+  currentInvoice.meta.status = cfg.defaultStatus;
+  currentInvoice.meta.showSignature = (curType !== 'invoice');
+  currentInvoice.notes = cfg.defaultNotes;
+  if (defCompany) {
+    currentInvoice.sender = {
+      name: defCompany.name || '',
+      email: defCompany.email || '',
+      phone: defCompany.phone || '',
+      address: defCompany.address || '',
+      taxId: defCompany.taxId || ''
+    };
+    currentInvoice.payment = defCompany.payment || '';
+    activeCompanyProfileId = defCompany.id;
+  } else {
+    currentInvoice.payment = '';
+  }
+
+  if (prefillClient) {
+    currentInvoice.client = {
+      name: prefillClient.name || '',
+      email: prefillClient.email || '',
+      phone: prefillClient.phone || '',
+      address: prefillClient.address || '',
+      taxId: prefillClient.taxId || ''
+    };
+  }
+
+  try { await renderCompanyProfilesSelector(); } catch (e) { console.warn(e); }
+  populateFormFields();
+  renderLineItemsEditor();
+  renderTaxesEditor();
+  updateSheetView();
+  triggerAutoSave();
+}
+
 function attachNavigationListeners() {
   setupPillNavigation();
 
@@ -3938,57 +4051,47 @@ function attachNavigationListeners() {
     }
   });
 
-  async function resetToFreshDocument(prefillClient = null) {
-    const curType = currentInvoice.meta.docType || 'invoice';
-    const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
-    const defCompany = await getDefaultCompany();
-    currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
-    currentInvoice.id = (curType === 'invoice' ? 'inv_' : 'doc_') + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-    currentInvoice.meta.date = new Date().toISOString().split('T')[0];
-    currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
-    currentInvoice.meta.docType = curType;
-    currentInvoice.meta.title = cfg.title;
-    if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-      currentInvoice.meta.number = generateDocumentNumber(curType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
-    } else {
-      currentInvoice.meta.number = cfg.prefix + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
-    }
-    currentInvoice.meta.status = cfg.defaultStatus;
-    currentInvoice.meta.showSignature = (curType !== 'invoice');
-    currentInvoice.notes = cfg.defaultNotes;
-    if (defCompany) {
-      currentInvoice.sender = {
-        name: defCompany.name || '',
-        email: defCompany.email || '',
-        phone: defCompany.phone || '',
-        address: defCompany.address || '',
-        taxId: defCompany.taxId || ''
-      };
-      currentInvoice.payment = defCompany.payment || '';
-      activeCompanyProfileId = defCompany.id;
-    } else {
-      currentInvoice.payment = '';
-    }
+  /**
+ * Burns the current auto-number so the next document gets a fresh one.
+ * Only advances when the document still carries the engine's current number,
+ * so repeated saves of the same document never skip a sequence number and
+ * hand-typed numbers are never overwritten.
+ * Returns true when the counter advanced.
+ */
+async function advanceNumberingCounter() {
+  if (!currentNumberingConfig || currentNumberingConfig.mode !== 'auto') return false;
+  await syncNumberingPeriod(currentNumberingConfig);
 
-    if (prefillClient) {
-      currentInvoice.client = {
-        name: prefillClient.name || '',
-        email: prefillClient.email || '',
-        phone: prefillClient.phone || '',
-        address: prefillClient.address || '',
-        taxId: prefillClient.taxId || ''
-      };
-    }
+  const expectedCurrent = generateDocumentNumber(
+    currentInvoice.meta.docType || 'invoice',
+    currentInvoice.meta.date,
+    currentNumberingConfig,
+    currentNumberingConfig.counter
+  );
+  if (currentInvoice.meta.number !== expectedCurrent) return false;
 
-    await renderCompanyProfilesSelector();
-    populateFormFields();
-    renderLineItemsEditor();
-    renderTaxesEditor();
-    updateSheetView();
-    triggerAutoSave();
+  currentNumberingConfig.counter = (parseInt(currentNumberingConfig.counter, 10) || 1) + 1;
+  currentNumberingConfig.updatedAt = Date.now();
+  try {
+    await saveNumberingConfig(currentNumberingConfig);
+  } catch (e) {
+    console.warn('Could not persist advanced numbering counter:', e);
   }
+  updateNumberingBadgeUI(currentNumberingConfig);
+  return true;
+}
 
-  // New Document Button (Opens Graceful Confirmation Dialog)
+/**
+ * Persists the active document and consumes its auto-generated number.
+ * Shared by "Save" and "Save & Start Fresh" so both paths stay consistent.
+ */
+async function persistCurrentDocument() {
+  await advanceNumberingCounter();
+  await saveInvoice(currentInvoice);
+  await updateSavedInvoicesCount();
+}
+
+// New Document Button (Opens Graceful Confirmation Dialog)
   const btnNewInvoice = document.getElementById('btn-new-invoice');
   if (btnNewInvoice) {
     btnNewInvoice.addEventListener('click', () => {
@@ -4004,8 +4107,7 @@ function attachNavigationListeners() {
   const btnNewSaveAndStart = document.getElementById('btn-new-save-and-start');
   if (btnNewSaveAndStart) {
     btnNewSaveAndStart.addEventListener('click', async () => {
-      await saveInvoice(currentInvoice);
-      await updateSavedInvoicesCount();
+      await persistCurrentDocument();
       closeModal('modal-confirm-new-doc');
       await resetToFreshDocument();
     });
@@ -4021,24 +4123,7 @@ function attachNavigationListeners() {
 
   // Save Document Button
   document.getElementById('btn-save-invoice').addEventListener('click', async () => {
-    // If numbering is in auto mode, check if we should advance counter
-    if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-      const expectedCurrent = generateDocumentNumber(
-        currentInvoice.meta.docType || 'invoice',
-        currentInvoice.meta.date,
-        currentNumberingConfig,
-        currentNumberingConfig.counter
-      );
-      if (currentInvoice.meta.number === expectedCurrent) {
-        currentNumberingConfig.counter = (parseInt(currentNumberingConfig.counter, 10) || 1) + 1;
-        currentNumberingConfig.updatedAt = Date.now();
-        await saveNumberingConfig(currentNumberingConfig);
-        updateNumberingBadgeUI(currentNumberingConfig);
-      }
-    }
-
-    await saveInvoice(currentInvoice);
-    await updateSavedInvoicesCount();
+    await persistCurrentDocument();
     const docTypeName = (DOC_TYPES[currentInvoice.meta.docType] || DOC_TYPES.invoice).name;
     alert(`${docTypeName} "${currentInvoice.meta.number}" saved successfully to IndexedDB!`);
   });
@@ -4170,11 +4255,12 @@ function attachNavigationListeners() {
   // Quick Next Seq # button in Section 3
   const btnQuickNextNum = document.getElementById('btn-quick-next-num');
   if (btnQuickNextNum) {
-    btnQuickNextNum.addEventListener('click', () => {
+    btnQuickNextNum.addEventListener('click', async () => {
       if (currentNumberingConfig.mode === 'manual') {
         alert('Numbering is currently in Manual Mode. Click "Numbering Engine" to switch to Auto Continuous Sequence.');
         return;
       }
+      await syncNumberingPeriod(currentNumberingConfig);
       const nextNum = generateDocumentNumber(
         currentInvoice.meta.docType || 'invoice',
         currentInvoice.meta.date,
@@ -4322,6 +4408,10 @@ function attachModalListeners() {
       currentNumberingConfig.padding = parseInt(document.getElementById('num-cfg-padding')?.value, 10) || 4;
       currentNumberingConfig.resetPeriod = document.getElementById('num-cfg-reset')?.value || 'financial_year';
       currentNumberingConfig.updatedAt = Date.now();
+      // Stamp the current period explicitly: the counter value the user just typed
+      // is authoritative, so bind it to this period rather than letting a rollover
+      // reset it away on the next document.
+      currentNumberingConfig.lastPeriodKey = resolvePeriodKey(new Date(), currentNumberingConfig.resetPeriod);
 
       await saveNumberingConfig(currentNumberingConfig);
       updateNumberingBadgeUI(currentNumberingConfig);
@@ -4506,7 +4596,7 @@ async function renderSavedInvoicesList() {
       const num = (inv.meta?.number || '').toLowerCase();
       const clientStr = cName.toLowerCase();
       const emailStr = (inv.client?.email || '').toLowerCase();
-      const itemsMatch = (inv.items || []).some(it => (it.desc || '').toLowerCase().includes(q));
+      const itemsMatch = (inv.items || []).some(it => (it.description || '').toLowerCase().includes(q));
       if (!num.includes(q) && !clientStr.includes(q) && !emailStr.includes(q) && !itemsMatch) {
         return false;
       }
@@ -4568,13 +4658,13 @@ async function renderSavedInvoicesList() {
       <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
         <div>
           <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
-            ${escapeHtml(inv.meta.number || 'Document')}
+            ${escapeHtml(inv.meta?.number || 'Document')}
             ${docBadge}
             <span style="color:#94a3b8; font-weight:400; margin:0 4px;">&bull;</span>
-            ${escapeHtml(inv.client.name || 'Client')}
+            ${escapeHtml(inv.client?.name || 'Client')}
           </div>
           <div style="font-size:11.5px; color:#64748b; margin-top:2px;">
-            Updated: ${escapeHtml(dateFormatted)} &bull; ${escapeHtml(inv.meta.currency || '$')}${escapeHtml(invTotalText)}
+            Updated: ${escapeHtml(dateFormatted)} &bull; ${escapeHtml(inv.meta?.currency || '$')}${escapeHtml(invTotalText)}
           </div>
         </div>
         <div style="display:flex; gap:6px;">
@@ -4806,7 +4896,7 @@ function calculateTotal(inv) {
     const r = clampNum(item.rate, 0, 1000000000, 0);
     const d = clampNum(item.discount, 0, 100, 0);
     const taxable = q * r * (1 - d / 100);
-    const rawRate = (item.taxRate !== undefined && item.taxRate !== null) ? parseFloat(item.taxRate) : 0;
+    const rawRate = (item.taxRate !== undefined && item.taxRate !== null) ? parseFloat(item.taxRate) : 18;
     const taxRate = isFinite(rawRate) ? Math.min(100, Math.max(0, rawRate)) : 0;
     sub += taxable;
     totalTax += taxable * (taxRate / 100);
