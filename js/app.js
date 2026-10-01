@@ -3929,6 +3929,14 @@ function attachZoomListeners() {
     canvasZoom = 0.85;
     updateZoom();
   });
+
+  const pageBadge = document.getElementById('canvas-page-badge');
+  if (pageBadge) {
+    pageBadge.addEventListener('click', () => {
+      showPageBreakGuides = !showPageBreakGuides;
+      updateDocumentPaginationLive();
+    });
+  }
 }
 
 // ============================================================================
@@ -4078,6 +4086,8 @@ function isDummyApexPayment(text) {
 // ============================================================================
 // 13. LIVE A4 PAGINATION ENGINE
 // ============================================================================
+let showPageBreakGuides = false; // Kept false by default to prevent intrusive dashed lines across the invoice canvas
+
 function updateDocumentPaginationLive() {
   const sheet = document.getElementById('invoice-sheet');
   const badge = document.getElementById('canvas-page-badge');
@@ -4089,20 +4099,28 @@ function updateDocumentPaginationLive() {
     const a4PageHeightPx = 1122;
     const contentHeight = sheet.scrollHeight;
 
-    // Buffer tolerance for subpixel rounding & min-height container
+    // Buffer tolerance for subpixel antialiasing & screen vs print padding disparity
+    // On screen, the sheet has min-height: 297mm (1122px). If content is within 1195px,
+    // it will comfortably fit in a single 1-page A4 print due to tight print margins.
     let estimatedPages = 1;
-    if (contentHeight > 1165) {
-      estimatedPages = Math.max(1, Math.ceil((contentHeight - 20) / a4PageHeightPx));
+    if (contentHeight > 1195) {
+      estimatedPages = Math.max(1, Math.ceil((contentHeight - 40) / a4PageHeightPx));
     }
 
     if (estimatedPages === 1) {
       badge.classList.remove('multi-page');
       textEl.textContent = 'A4: 1 Page';
-      badge.title = 'Document fits cleanly on 1 single page (A4).';
+      badge.title = 'Document fits cleanly on 1 single page (A4). Click to toggle visual boundary guides.';
     } else {
       badge.classList.add('multi-page');
       textEl.textContent = `A4: ${estimatedPages} Pages`;
-      badge.title = `Document spans across ${estimatedPages} pages. Table headers will automatically repeat at the top of each page when printing.`;
+      badge.title = `Document spans across ${estimatedPages} pages. Table headers will automatically repeat at the top of each page when printing. Click to toggle visual boundary guides.`;
+    }
+
+    if (showPageBreakGuides) {
+      badge.classList.add('guides-active');
+    } else {
+      badge.classList.remove('guides-active');
     }
 
     renderVisualPageBreakGuides(sheet, estimatedPages, a4PageHeightPx);
@@ -4110,10 +4128,11 @@ function updateDocumentPaginationLive() {
 }
 
 function renderVisualPageBreakGuides(sheet, totalPages, pageHeightPx) {
-  // Remove existing guide lines
+  // Always clean up existing guide lines
   sheet.querySelectorAll('.canvas-page-break-line').forEach(el => el.remove());
 
-  if (totalPages <= 1) return;
+  // Only render visual guide lines if multi-page AND user explicitly enabled guides
+  if (totalPages <= 1 || !showPageBreakGuides) return;
 
   for (let p = 1; p < totalPages; p++) {
     const guide = document.createElement('div');

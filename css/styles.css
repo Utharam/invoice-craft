@@ -669,6 +669,17 @@ body {
   color: #475569;
   transition: all 0.2s ease;
   user-select: none;
+  cursor: pointer;
+}
+
+.page-count-badge:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.page-count-badge.guides-active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
 }
 
 .page-count-badge .page-badge-dot {
@@ -983,7 +994,7 @@ body {
   box-shadow: var(--shadow-sheet);
   border-radius: 2px;
   box-sizing: border-box;
-  padding: 16mm 16mm;
+  padding: 12mm 14mm 10mm 14mm;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -997,7 +1008,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   transition: all 0.2s ease;
 }
 
@@ -1140,9 +1151,9 @@ body {
 .sheet-parties {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  margin-bottom: 24px;
-  padding: 12px 0;
+  gap: 20px;
+  margin-bottom: 16px;
+  padding: 8px 0;
   border-top: 1px solid #f1f5f9;
   border-bottom: 1px solid #f1f5f9;
 }
@@ -1178,7 +1189,7 @@ body {
 .sheet-table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .sheet-table th {
@@ -1186,7 +1197,7 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 10px 8px;
+  padding: 8px 8px;
   text-align: left;
   border-bottom: 2px solid #e2e8f0;
   color: #475569;
@@ -1201,7 +1212,7 @@ body {
 }
 
 .sheet-table td {
-  padding: 12px 8px;
+  padding: 8px 8px;
   font-size: 12px;
   border-bottom: 1px solid #f1f5f9;
   color: #1e293b;
@@ -1217,9 +1228,9 @@ body {
 .sheet-bottom-section {
   display: grid;
   grid-template-columns: 1.2fr 1fr;
-  gap: 24px;
-  margin-top: 20px;
-  padding-top: 16px;
+  gap: 20px;
+  margin-top: 14px;
+  padding-top: 10px;
   align-items: start;
 }
 
@@ -1335,7 +1346,7 @@ body {
 
 .sheet-footer {
   margin-top: auto;
-  padding-top: 14px;
+  padding-top: 10px;
   border-top: 1px solid #f1f5f9;
   font-size: 11px;
   color: #94a3b8;
@@ -1394,8 +1405,8 @@ body {
 .template-executive-corporate .sheet-header {
   background: var(--accent-color);
   color: #ffffff;
-  padding: 18mm 16mm 14mm 16mm;
-  margin-bottom: 20px;
+  padding: 12mm 14mm 10mm 14mm;
+  margin-bottom: 16px;
 }
 .template-executive-corporate .sheet-company-title {
   color: #ffffff;
