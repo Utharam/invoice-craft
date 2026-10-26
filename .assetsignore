@@ -1,10 +1,18 @@
 # Cloudflare Workers / Pages Static Assets ignore file
 node_modules/
+.wrangler/
 .git/
 .github/
+.superpowers/
+docs/
+tests/
 package.json
 package-lock.json
+js/package.json
 build.js
 start.bat
+README.md
+BUG_REPORT.md
+GEMINI.md
 scratch/
 *.log

@@ -12,3 +12,14 @@ desktop.ini
 # Temporary and log files
 *.log
 scratch/
+coverage/
+
+# Cloudflare Wrangler
+.wrangler/
+
+# IDE and editor files
+.vscode/
+.idea/
+
+# Local implementation workspace (planning/ledger artifacts)
+.superpowers/

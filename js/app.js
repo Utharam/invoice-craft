@@ -5,12 +5,11 @@
 
 import {
   openDB,
-  saveInvoice,
   getInvoice,
   getAllInvoices,
   deleteInvoice,
   saveActiveDraft,
-  getActiveDraft,
+  getActiveDraftRecord,
   saveCompany,
   getCompany,
   getAllCompanies,
@@ -22,9 +21,15 @@ import {
   deleteClient,
   exportAllData,
   importAllData,
-  DEFAULT_NUMBERING_CONFIG,
+  saveInvoiceAndNumbering,
+  saveConversion,
   saveNumberingConfig,
-  getNumberingConfig
+  getNumberingConfig,
+  getAllCatalogItems,
+  saveCatalogItem,
+  deleteCatalogItem,
+  getItemLibraryConfig,
+  saveItemLibraryConfig
 } from './db.js';
 
 import {
@@ -34,6 +39,52 @@ import {
   generateMonogramSVG,
   generateIconDataURI
 } from './icons.js';
+
+import {
+  formatMoney,
+  amountToWords,
+  clampNum,
+  calculateTotals,
+  calculateTotal,
+  normalizeCurrency
+} from './calc.js';
+
+import {
+  DEFAULT_NUMBERING_CONFIG,
+  normalizeNumberingConfig,
+  resolvePeriodKey,
+  parseLocalDate,
+  getCounter,
+  generateDocumentNumber,
+  periodRollover,
+  advanceTypeCounter
+} from './numbering.js';
+
+import {
+  buildConversionRecords,
+  buildDuplicateRecord
+} from './lifecycle.js';
+
+import {
+  normalizeCatalogScope,
+  buildCatalogCandidateFromLineItem,
+  findCatalogMatch,
+  catalogItemToLineItem,
+  groupCatalogItemsForView
+} from './catalog.js';
+
+import {
+  initShell,
+  navigateTo,
+  refreshShellCounts,
+  getCurrentView,
+  renderHome
+} from './shell.js';
+
+import {
+  mountReportsView,
+  refreshReportsView
+} from './report-ui.js';
 
 // ============================================================================
 // 1. TEMPLATES REGISTRY (10 Distinct Models)
@@ -104,7 +155,7 @@ const TEMPLATES = [
 // ============================================================================
 // 2. DOCUMENT TYPES REGISTRY (Invoice, Quotation, Estimate, Proforma)
 // ============================================================================
-const DOC_TYPES = {
+const APP_DOC_TYPES = {
   invoice: {
     id: 'invoice',
     name: 'Invoice',
@@ -213,8 +264,11 @@ const DEFAULT_INVOICE_STATE = {
     docType: 'invoice',
     title: 'INVOICE',
     number: 'INV-2026-001',
-    date: new Date().toISOString().split('T')[0],
-    dueDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
+    // Local calendar dates (appLocalDateString/addDaysLocal are hoisted
+    // function declarations). UTC-based ISO strings would shift the default
+    // date near midnight and put the wrong period into generated numbers.
+    date: appLocalDateString(),
+    dueDate: addDaysLocal(appLocalDateString(), 14),
     currency: '$',
     numberFormat: 'international',
     showAmountInWords: false,
@@ -293,14 +347,24 @@ const DEFAULT_INVOICE_STATE = {
 function normalizeInvoice(inv) {
   if (!inv) return;
   if (!inv.meta) inv.meta = {};
-  if (!inv.meta.docType || !DOC_TYPES[inv.meta.docType]) {
+  if (!inv.meta.docType || !APP_DOC_TYPES[inv.meta.docType]) {
     inv.meta.docType = 'invoice';
   }
   if (inv.meta.showSignature === undefined) {
     inv.meta.showSignature = (inv.meta.docType !== 'invoice');
   }
-  if (!inv.meta.number) {
-    inv.meta.number = (DOC_TYPES[inv.meta.docType].prefix || 'INV-') + new Date().getFullYear() + '-001';
+  if (inv.meta.number === undefined || inv.meta.number === null) {
+    // Never invent a number here: manual mode intentionally allows a blank
+    // number that the user fills in before saving.
+    inv.meta.number = '';
+  }
+  // Persisted records are never renumbered (H1): only engine-issued unsaved
+  // drafts (meta.numberAuto === true) may have their number regenerated.
+  // Unknown markers default to false, i.e. treated as hand-edited.
+  if (inv.updatedAt !== undefined && inv.updatedAt !== null) {
+    inv.meta.numberAuto = false;
+  } else if (inv.meta.numberAuto === undefined) {
+    inv.meta.numberAuto = false;
   }
   if (!inv.meta.currency) inv.meta.currency = '$';
   if (!inv.sender) inv.sender = {};
@@ -320,11 +384,10 @@ function normalizeInvoice(inv) {
   // Drop malformed entries so a partially corrupted backup cannot break rendering.
   inv.items = inv.items.filter(item => item && typeof item === 'object');
   inv.items.forEach(item => {
-    if (item.taxRate === undefined || item.taxRate === null) {
-      item.taxRate = 18;
-    } else {
-      item.taxRate = clampNum(item.taxRate, 0, 100, 0);
-    }
+    // Missing / null / empty / non-numeric tax rates default to 18, matching
+    // the shared calculator and db normalization (L2). Never 0.
+    const rawTaxRate = (item.taxRate === undefined || item.taxRate === null || item.taxRate === '') ? 18 : parseFloat(item.taxRate);
+    item.taxRate = isFinite(rawTaxRate) ? clampNum(rawTaxRate, 0, 100, 18) : 18;
     if (item.qty === undefined || item.qty === null) {
       item.qty = 0;
     } else {
@@ -375,272 +438,100 @@ function normalizeInvoice(inv) {
   }
 }
 
-/**
- * Currency & Number Formatter supporting Indian (Lakhs & Crores) and International (Millions) styles.
- * Indian format: 12,34,567.89
- * International format: 1,234,567.89
- */
-function formatMoney(amount, currency = '', format = 'international') {
-  const num = Number(amount) || 0;
-  const isNeg = num < 0;
-  const absNum = Math.abs(num);
-  const parts = absNum.toFixed(2).split('.');
-  let intPart = parts[0];
-  const decPart = parts[1];
 
-  let formattedInt = '';
-  if (format === 'indian') {
-    // Indian formatting: last 3 digits, then groups of 2 digits
-    if (intPart.length > 3) {
-      const lastThree = intPart.substring(intPart.length - 3);
-      const otherNumbers = intPart.substring(0, intPart.length - 3);
-      formattedInt = otherNumbers.replace(/\B(?=(\d{2})+(?!\d))/g, ",") + "," + lastThree;
-    } else {
-      formattedInt = intPart;
-    }
-  } else {
-    // International standard formatting: groups of 3 digits
-    formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  }
-
-  const sign = isNeg ? '-' : '';
-  const sep = (currency && (currency.length > 1 || currency === '₹')) ? ' ' : '';
-  return `${sign}${currency}${currency ? sep : ''}${formattedInt}.${decPart}`;
-}
-
-/**
- * Number to Words Converter supporting Indian (Lakhs/Crores/Rupees/Paise)
- * and International (Millions/Billions/Dollars/Cents) conventions.
- */
-const NUM_WORDS_ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
-const NUM_WORDS_TEENS = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-const NUM_WORDS_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-
-function convertThreeDigitsToWords(n) {
-  let str = '';
-  if (n >= 100) {
-    str += NUM_WORDS_ONES[Math.floor(n / 100)] + ' Hundred ';
-    n %= 100;
-  }
-  if (n >= 20) {
-    str += NUM_WORDS_TENS[Math.floor(n / 10)] + (n % 10 > 0 ? '-' + NUM_WORDS_ONES[n % 10] : '') + ' ';
-  } else if (n >= 10) {
-    str += NUM_WORDS_TEENS[n - 10] + ' ';
-  } else if (n > 0) {
-    str += NUM_WORDS_ONES[n] + ' ';
-  }
-  return str.trim();
-}
-
-function convertInternationalToWords(num) {
-  if (num === 0) return 'Zero';
-  const scales = ['', 'Thousand', 'Million', 'Billion', 'Trillion', 'Quadrillion', 'Quintillion'];
-  let words = [];
-  let scaleIdx = 0;
-  num = Math.floor(Math.abs(num));
-  if (num > Number.MAX_SAFE_INTEGER) return String(Math.floor(num));
-  while (num > 0) {
-    const chunk = num % 1000;
-    if (chunk > 0) {
-      const chunkWords = convertThreeDigitsToWords(chunk);
-      const scaleName = scales[scaleIdx] || '';
-      words.unshift(scaleName ? `${chunkWords} ${scaleName}` : chunkWords);
-    }
-    num = Math.floor(num / 1000);
-    scaleIdx++;
-  }
-  return words.join(' ').trim();
-}
-
-function convertIndianToWords(num) {
-  if (num === 0) return 'Zero';
-  const crore = Math.floor(num / 10000000);
-  num %= 10000000;
-  const lakh = Math.floor(num / 100000);
-  num %= 100000;
-  const thousand = Math.floor(num / 1000);
-  num %= 1000;
-  const remainder = num;
-
-  let parts = [];
-  if (crore > 0) {
-    parts.push(convertIndianToWords(crore) + ' Crore');
-  }
-  if (lakh > 0) {
-    parts.push(convertThreeDigitsToWords(lakh) + ' Lakh');
-  }
-  if (thousand > 0) {
-    parts.push(convertThreeDigitsToWords(thousand) + ' Thousand');
-  }
-  if (remainder > 0) {
-    parts.push(convertThreeDigitsToWords(remainder));
-  }
-  return parts.join(' ').trim();
-}
-
-function amountToWords(amount, currency = '$', format = 'international') {
-  const num = Math.abs(Number(amount) || 0);
-  let intPart = Math.floor(num);
-  let decPart = Math.round((num - intPart) * 100);
-  // Carry rounding overflow (e.g. 99.995 -> 100.00, not "One Hundred Cents").
-  if (decPart === 100) {
-    intPart += 1;
-    decPart = 0;
-  }
-
-  const currMap = {
-    '₹': { majorSingular: 'Rupee', majorPlural: 'Rupees', minorSingular: 'Paisa', minorPlural: 'Paise', leadMajor: true },
-    '$': { majorSingular: 'Dollar', majorPlural: 'Dollars', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
-    '€': { majorSingular: 'Euro', majorPlural: 'Euros', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
-    '£': { majorSingular: 'Pound', majorPlural: 'Pounds', minorSingular: 'Penny', minorPlural: 'Pence', leadMajor: false },
-    'C$': { majorSingular: 'Canadian Dollar', majorPlural: 'Canadian Dollars', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
-    'A$': { majorSingular: 'Australian Dollar', majorPlural: 'Australian Dollars', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false },
-    'AED': { majorSingular: 'UAE Dirham', majorPlural: 'UAE Dirhams', minorSingular: 'Fil', minorPlural: 'Fils', leadMajor: false },
-    'SAR': { majorSingular: 'Saudi Riyal', majorPlural: 'Saudi Riyals', minorSingular: 'Halala', minorPlural: 'Halalas', leadMajor: false },
-    'BHD': { majorSingular: 'Bahraini Dinar', majorPlural: 'Bahraini Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
-    'BD': { majorSingular: 'Bahraini Dinar', majorPlural: 'Bahraini Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
-    'QAR': { majorSingular: 'Qatari Riyal', majorPlural: 'Qatari Riyals', minorSingular: 'Dirham', minorPlural: 'Dirhams', leadMajor: false },
-    'KWD': { majorSingular: 'Kuwaiti Dinar', majorPlural: 'Kuwaiti Dinars', minorSingular: 'Fils', minorPlural: 'Fils', leadMajor: false },
-    'OMR': { majorSingular: 'Omani Rial', majorPlural: 'Omani Rials', minorSingular: 'Baisa', minorPlural: 'Baisa', leadMajor: false },
-    '¥': { majorSingular: 'Yen', majorPlural: 'Yen', minorSingular: '', minorPlural: '', leadMajor: false },
-    'CHF': { majorSingular: 'Swiss Franc', majorPlural: 'Swiss Francs', minorSingular: 'Rappen', minorPlural: 'Rappen', leadMajor: false }
-  };
-
-  const curr = currMap[currency] || { majorSingular: currency || '', majorPlural: currency || '', minorSingular: 'Cent', minorPlural: 'Cents', leadMajor: false };
-  // Derive Indian vs International words strictly from the selected number format
-  // so the sheet total (formatMoney) and the words block can never disagree.
-  const isIndian = (format === 'indian');
-  const intWords = isIndian ? convertIndianToWords(intPart) : convertInternationalToWords(intPart);
-
-  const majorWord = intPart === 1 ? curr.majorSingular : curr.majorPlural;
-  let result = '';
-  if (curr.leadMajor) {
-    result = majorWord + ' ' + intWords;
-  } else {
-    result = intWords + (majorWord ? ' ' + majorWord : '');
-  }
-
-  if (decPart > 0 && curr.minorPlural) {
-    const decWords = convertThreeDigitsToWords(decPart);
-    const minorWord = decPart === 1 ? curr.minorSingular : curr.minorPlural;
-    result += ' and ' + decWords + ' ' + minorWord;
-  }
-
-  return result.trim() + ' Only';
-}
+let currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
+let currentNumberingConfig = normalizeNumberingConfig(DEFAULT_NUMBERING_CONFIG);
+let canvasZoom = 1.0;
+let autoSaveTimer = null;
+let currentDocumentPersisted = false;
+let documentEdited = false;
+let pendingNewDocType = null;
+let pendingPrefillClient = null;
+let toggleSidebarPanel = null;
+let reportsMounted = false;
+let autosaveInFlight = null;
 
 // ============================================================================
-// 2B. NUMBERING ENGINE HELPERS
+// 2B. NUMBERING ENGINE UI HELPERS (pure work lives in js/numbering.js)
 // ============================================================================
-let currentNumberingConfig = Object.assign({}, DEFAULT_NUMBERING_CONFIG);
-
-function formatFinancialYear(d) {
-  const date = (d instanceof Date && !isNaN(d.getTime())) ? d : new Date();
-  const month = date.getMonth(); // 0-indexed, 3 is April
-  const year = date.getFullYear();
-  if (month >= 3) {
-    const nextYearShort = (year + 1).toString().slice(-2);
-    return `${year}-${nextYearShort}`;
-  } else {
-    const curYearShort = year.toString().slice(-2);
-    return `${year - 1}-${curYearShort}`;
-  }
+function appLocalDateString(date = new Date()) {
+  const d = (date instanceof Date && !isNaN(date.getTime())) ? date : new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-function resolvePeriodKey(date, resetPeriod) {
-  if (resetPeriod === 'financial_year') return formatFinancialYear(date);
-  if (resetPeriod === 'calendar_year') return date.getFullYear().toString();
-  if (resetPeriod === 'monthly') return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-  return 'continuous';
+function addDaysLocal(dateStr, days) {
+  const base = parseLocalDate(dateStr) || new Date();
+  base.setDate(base.getDate() + days);
+  return appLocalDateString(base);
 }
 
-/**
- * Rolls the counter over when the configured reset period has changed and
- * persists the new period key. Kept separate from generateDocumentNumber so
- * that read-only previews (badges, modal live preview, save-time comparison)
- * never mutate the counter or write to IndexedDB.
- * Returns true when a rollover actually occurred.
- */
-async function syncNumberingPeriod(config) {
-  if (!config || config.mode === 'manual') return false;
-  const resetPeriod = config.resetPeriod || 'financial_year';
-  const currentPeriodKey = resolvePeriodKey(new Date(), resetPeriod);
-
-  if (config.lastPeriodKey === currentPeriodKey) return false;
-
-  if (resetPeriod !== 'never' && config.lastPeriodKey) {
-    config.counter = parseInt(config.startingCounter, 10) || 1;
-    config.lastPeriodKey = currentPeriodKey;
-    config.updatedAt = Date.now();
-    try {
-      await saveNumberingConfig(config);
-    } catch (e) {
-      console.warn('Could not persist numbering period rollover:', e);
-    }
-    return true;
-  }
-
-  // First run for this config: only stamp the period key, never reset the counter.
-  config.lastPeriodKey = currentPeriodKey;
-  try {
-    await saveNumberingConfig(config);
-  } catch (e) {
-    console.warn('Could not persist numbering period key:', e);
-  }
-  return false;
+function activeDocType() {
+  return (currentInvoice && currentInvoice.meta && currentInvoice.meta.docType) || 'invoice';
 }
 
-/**
- * Pure formatter: builds a document number from a config snapshot.
- * Performs no I/O and mutates nothing, so it is safe for live previews.
- */
-function generateDocumentNumber(docType, dateStr, config, overrideCounter = null) {
-  if (!config) config = DEFAULT_NUMBERING_CONFIG;
-  if (config.mode === 'manual' && overrideCounter === null) {
-    return currentInvoice?.meta?.number || 'INV-2026-001';
-  }
+function docTypeName(type) {
+  return (APP_DOC_TYPES[type] || APP_DOC_TYPES.invoice).name;
+}
 
-  const d = dateStr ? new Date(dateStr) : new Date();
-  const date = (!isNaN(d.getTime())) ? d : new Date();
+function numberingCounterId(type) {
+  return type === 'quotation' ? 'num-cfg-counter-quotation'
+    : type === 'estimate' ? 'num-cfg-counter-estimate'
+      : type === 'proforma' ? 'num-cfg-counter-proforma'
+        : 'num-cfg-counter-invoice';
+}
 
-  // Determine Prefix for docType
-  let prefix = config.prefixInvoice || 'INV';
-  if (docType === 'quotation') prefix = config.prefixQuotation || 'QT';
-  else if (docType === 'estimate') prefix = config.prefixEstimate || 'EST';
-  else if (docType === 'proforma') prefix = config.prefixProforma || 'PI';
+function getPreviewId(type) {
+  return type === 'invoice' ? 'num-preview-invoice'
+    : type === 'quotation' ? 'num-preview-quote'
+      : type === 'estimate' ? 'num-preview-estimate'
+        : 'num-preview-proforma';
+}
 
-  // Format variables
-  const counterVal = (overrideCounter !== null) ? overrideCounter : (parseInt(config.counter, 10) || 1);
-  const padDigits = parseInt(config.padding, 10) || 4;
-  const paddedCounter = String(counterVal).padStart(padDigits, '0');
-  const yyyy = date.getFullYear().toString();
-  const yy = yyyy.slice(-2);
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const fy = formatFinancialYear(date);
-  const pattern = config.scheme || '{PREFIX}/{FY}/{COUNTER}';
+function generateForType(type, dateStr, config) {
+  const normalized = normalizeNumberingConfig(config);
+  if (normalized.mode === 'manual') return '';
+  return generateDocumentNumber(type, dateStr, normalized, getCounter(normalized, type));
+}
 
-  return pattern
-    .replace(/\{PREFIX\}/g, prefix)
-    .replace(/\{FY\}/g, fy)
-    .replace(/\{YYYY\}/g, yyyy)
-    .replace(/\{YY\}/g, yy)
-    .replace(/\{MM\}/g, mm)
-    .replace(/\{COUNTER\}/g, paddedCounter);
+function rolloverNumberingConfig(config = currentNumberingConfig) {
+  const rolled = periodRollover(normalizeNumberingConfig(config), new Date());
+  return normalizeNumberingConfig(rolled.config || config);
 }
 
 function updateNumberingBadgeUI(config) {
   const badgeText = document.getElementById('numbering-badge-text');
   if (!badgeText) return;
+  const type = activeDocType();
   if (!config || config.mode === 'manual') {
     badgeText.textContent = 'Manual Numbering';
-  } else {
-    const preview = generateDocumentNumber('invoice', currentInvoice.meta.date, config, config.counter);
-    badgeText.textContent = `Auto: ${preview}`;
+    return;
   }
+  const preview = generateForType(type, currentInvoice.meta.date, config);
+  badgeText.textContent = `Auto (${docTypeName(type)}): ${preview}`;
 }
 
 function populateNumberingModal(config) {
-  if (!config) config = DEFAULT_NUMBERING_CONFIG;
+  if (!config) config = currentNumberingConfig || DEFAULT_NUMBERING_CONFIG;
+  // Rollover must be applied BEFORE the counters are shown, and persisted when
+  // it changed, so opening this modal across a period boundary never displays
+  // (or later saves) stale counters (H4). readNumberingModalConfig may stamp
+  // the current period key afterwards.
+  const rolled = periodRollover(normalizeNumberingConfig(config), new Date());
+  config = normalizeNumberingConfig(rolled.config || config);
+  if (rolled.changed) {
+    currentNumberingConfig = config;
+    try {
+      const persisted = saveNumberingConfig(config);
+      if (persisted && typeof persisted.catch === 'function') {
+        persisted.catch(e => console.warn('Could not persist numbering rollover:', e));
+      }
+    } catch (e) {
+      console.warn('Could not persist numbering rollover:', e);
+    }
+  }
   const radioAuto = document.getElementById('radio-mode-auto');
   const radioManual = document.getElementById('radio-mode-manual');
   const settingsPanel = document.getElementById('auto-numbering-settings-panel');
@@ -665,8 +556,12 @@ function populateNumberingModal(config) {
   const prefixPi = document.getElementById('num-prefix-pi');
   if (prefixPi) prefixPi.value = config.prefixProforma || 'PI';
 
-  const counterInput = document.getElementById('num-cfg-counter');
-  if (counterInput) counterInput.value = config.counter || 1;
+  ['invoice', 'quotation', 'estimate', 'proforma'].forEach(type => {
+    const input = document.getElementById(numberingCounterId(type));
+    if (input) input.value = getCounter(config, type);
+  });
+  const legacyCounterInput = document.getElementById('num-cfg-counter');
+  if (legacyCounterInput) legacyCounterInput.value = getCounter(config, 'invoice');
 
   const paddingSelect = document.getElementById('num-cfg-padding');
   if (paddingSelect) paddingSelect.value = String(config.padding || 4);
@@ -678,46 +573,151 @@ function populateNumberingModal(config) {
 }
 
 function updateNumberingModalPreviewLive() {
-  const previewInv = document.getElementById('num-preview-text');
-  const previewQuote = document.getElementById('num-preview-quote');
-  if (!previewInv) return;
-
   const mode = document.querySelector('input[name="num-mode"]:checked')?.value || 'auto';
-  const tempConfig = {
+  const tempConfig = normalizeNumberingConfig({
     mode,
     scheme: document.getElementById('num-cfg-pattern')?.value || '{PREFIX}/{FY}/{COUNTER}',
     prefixInvoice: document.getElementById('num-prefix-inv')?.value || 'INV',
     prefixQuotation: document.getElementById('num-prefix-qt')?.value || 'QT',
     prefixEstimate: document.getElementById('num-prefix-est')?.value || 'EST',
     prefixProforma: document.getElementById('num-prefix-pi')?.value || 'PI',
-    counter: parseInt(document.getElementById('num-cfg-counter')?.value, 10) || 1,
+    counters: {
+      invoice: parseInt(document.getElementById(numberingCounterId('invoice'))?.value, 10) || 1,
+      quotation: parseInt(document.getElementById(numberingCounterId('quotation'))?.value, 10) || 1,
+      estimate: parseInt(document.getElementById(numberingCounterId('estimate'))?.value, 10) || 1,
+      proforma: parseInt(document.getElementById(numberingCounterId('proforma'))?.value, 10) || 1
+    },
+    startingCounters: currentNumberingConfig.startingCounters,
     padding: parseInt(document.getElementById('num-cfg-padding')?.value, 10) || 4,
-    resetPeriod: document.getElementById('num-cfg-reset')?.value || 'financial_year'
-  };
+    resetPeriod: document.getElementById('num-cfg-reset')?.value || 'financial_year',
+    lastPeriodKey: currentNumberingConfig.lastPeriodKey
+  });
 
+  const activePreview = document.getElementById('num-preview-text');
   if (mode === 'manual') {
-    previewInv.textContent = 'Manual Entry (User Discretion)';
-    if (previewQuote) previewQuote.textContent = 'Manual';
-  } else {
-    const invNum = generateDocumentNumber('invoice', currentInvoice.meta.date, tempConfig, tempConfig.counter);
-    const qtNum = generateDocumentNumber('quotation', currentInvoice.meta.date, tempConfig, tempConfig.counter);
-    previewInv.textContent = invNum;
-    if (previewQuote) previewQuote.textContent = qtNum;
+    ['invoice', 'quotation', 'estimate', 'proforma'].forEach(type => {
+      const el = document.getElementById(getPreviewId(type));
+      if (el) el.textContent = 'Manual';
+    });
+    if (activePreview) activePreview.textContent = 'Manual Entry (User Discretion)';
+    return;
+  }
+
+  const dateStr = currentInvoice.meta.date || appLocalDateString();
+  ['invoice', 'quotation', 'estimate', 'proforma'].forEach(type => {
+    const el = document.getElementById(getPreviewId(type));
+    if (el) el.textContent = generateForType(type, dateStr, tempConfig);
+  });
+  if (activePreview) {
+    activePreview.textContent = `${docTypeName(activeDocType())}: ${generateForType(activeDocType(), dateStr, tempConfig)}`;
   }
 }
 
-let currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
-let canvasZoom = 1.0;
-let autoSaveTimer = null;
+function readNumberingModalConfig() {
+  const mode = document.querySelector('input[name="num-mode"]:checked')?.value || 'auto';
+  const counters = {};
+  ['invoice', 'quotation', 'estimate', 'proforma'].forEach(type => {
+    const el = document.getElementById(numberingCounterId(type));
+    counters[type] = parseInt(el?.value, 10) || 1;
+  });
+  const resetPeriod = document.getElementById('num-cfg-reset')?.value || 'financial_year';
+  const base = normalizeNumberingConfig(currentNumberingConfig);
+  return normalizeNumberingConfig(Object.assign({}, base, {
+    mode,
+    scheme: document.getElementById('num-cfg-pattern')?.value || '{PREFIX}/{FY}/{COUNTER}',
+    prefixInvoice: document.getElementById('num-prefix-inv')?.value || 'INV',
+    prefixQuotation: document.getElementById('num-prefix-qt')?.value || 'QT',
+    prefixEstimate: document.getElementById('num-prefix-est')?.value || 'EST',
+    prefixProforma: document.getElementById('num-prefix-pi')?.value || 'PI',
+    counters,
+    // The edited live counters become the reset baseline (as the legacy UI
+    // did), so a period/manual reset returns to the user-entered values
+    // instead of an invisible old starting value.
+    startingCounters: Object.assign({}, counters),
+    padding: parseInt(document.getElementById('num-cfg-padding')?.value, 10) || 4,
+    resetPeriod,
+    lastPeriodKey: resolvePeriodKey(new Date(), resetPeriod),
+    updatedAt: Date.now()
+  }));
+}
+
+/**
+ * Reset-safety validation (pure, testable): the scheme must carry enough
+ * period information for the chosen reset policy, or numbers collide after
+ * every rollover. Returns null when valid, else a human-readable reason.
+ * - monthly:        {MM} plus a year token ({YYYY}, {YY} or {FY})
+ * - calendar_year:  a year token ({YYYY}, {YY} or {FY})
+ * - financial_year: {FY}, or ({YYYY} or {YY}) plus {MM}
+ * - never:          no period-token requirement
+ */
+function validateNumberingSchemePeriod(scheme, resetPeriod) {
+  const pattern = String(scheme || '');
+  const hasYear = pattern.includes('{YYYY}') || pattern.includes('{YY}') || pattern.includes('{FY}');
+  const hasMonth = pattern.includes('{MM}');
+  if (resetPeriod === 'monthly' && !(hasYear && hasMonth)) {
+    return 'Monthly reset requires a year token ({YYYY}, {YY} or {FY}) and {MM} in the scheme, otherwise numbers repeat after every monthly reset.';
+  }
+  if (resetPeriod === 'calendar_year' && !hasYear) {
+    return 'Calendar-year reset requires a year token ({YYYY}, {YY} or {FY}) in the scheme, otherwise numbers repeat after every yearly reset.';
+  }
+  if (resetPeriod === 'financial_year' &&
+      !(pattern.includes('{FY}') || ((pattern.includes('{YYYY}') || pattern.includes('{YY}')) && hasMonth))) {
+    return 'Financial-year reset requires {FY}, or a year token ({YYYY} or {YY}) plus {MM}, in the scheme so numbers never repeat across years.';
+  }
+  return null; // 'never' (and any unknown policy): no period-token requirement
+}
+
+/**
+ * Manual-mode numbers must be unique per document type. Auto numbers are
+ * generated, but a hand-edited auto number is still checked.
+ */
+async function findNumberConflict(number, docType, excludeId) {
+  const wanted = String(number || '').trim().toLowerCase();
+  if (!wanted) return false;
+  const invoices = await getAllInvoices();
+  return invoices.some(inv => {
+    if (excludeId && inv.id === excludeId) return false;
+    const invType = (inv.meta && inv.meta.docType) || inv.docType || 'invoice';
+    if (invType !== docType) return false;
+    const invNumber = String((inv.meta && inv.meta.number) || inv.meta?.number || '').trim().toLowerCase();
+    return invNumber === wanted;
+  });
+}
+
+async function flushAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+  // A pristine document (never edited, never persisted) has nothing worth
+  // preserving: writing it here would create a phantom demo continue-draft on
+  // a fresh install just by changing routes.
+  if (!documentEdited && !currentDocumentPersisted) {
+    return;
+  }
+  if (autosaveInFlight) {
+    try { await autosaveInFlight; } catch (e) {}
+  }
+  try {
+    autosaveInFlight = saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited });
+    await autosaveInFlight;
+  } catch (e) {
+    console.warn('Auto-save flush error:', e);
+  } finally {
+    autosaveInFlight = null;
+  }
+}
 
 // ============================================================================
 // 3. INITIALIZATION
 // ============================================================================
 document.addEventListener('DOMContentLoaded', async () => {
+  let dbReady = false;
   try {
     await openDB();
+    dbReady = true;
   } catch (err) {
-    console.warn('IndexedDB fallback issue:', err);
+    console.warn('IndexedDB unavailable; the editor will run with local memory until reload:', err);
     const indicator = document.getElementById('db-status-indicator');
     if (indicator) {
       indicator.innerHTML = `
@@ -732,20 +732,73 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentNumberingConfig = await getNumberingConfig();
   } catch (e) {
     console.warn('Numbering config load failed, using defaults:', e);
-    currentNumberingConfig = Object.assign({}, DEFAULT_NUMBERING_CONFIG);
+    currentNumberingConfig = normalizeNumberingConfig(DEFAULT_NUMBERING_CONFIG);
+  }
+  const rolled = periodRollover(currentNumberingConfig, new Date());
+  currentNumberingConfig = normalizeNumberingConfig(rolled.config || currentNumberingConfig);
+  if (rolled.changed && dbReady) {
+    try { await saveNumberingConfig(currentNumberingConfig); } catch (e) { console.warn(e); }
+  }
+
+  // Load the saved item library (v4). Defaults keep Compose usable when IDB
+  // is unavailable; the formatter-free cache is refreshed by catalog edits.
+  try {
+    catalogItems = await getAllCatalogItems();
+  } catch (e) {
+    console.warn('Item library load failed, using an empty library this session:', e);
+    catalogItems = [];
+  }
+  try {
+    itemLibraryConfig = await getItemLibraryConfig();
+  } catch (e) {
+    console.warn('Item library scope load failed, defaulting to Global:', e);
+    itemLibraryConfig = { scope: 'global', updatedAt: null };
   }
 
   // Load existing draft or use default (each step guarded so IDB denial can't blank the app)
-  let savedDraft = null;
+  let draftRecord = null;
   try {
-    savedDraft = await getActiveDraft();
+    draftRecord = await getActiveDraftRecord();
   } catch (e) {
     console.warn('Draft load failed, starting fresh:', e);
-    savedDraft = null;
+    draftRecord = null;
   }
+  const savedDraft = draftRecord && draftRecord.data ? draftRecord.data : null;
   if (savedDraft) {
     currentInvoice = Object.assign({}, DEFAULT_INVOICE_STATE, savedDraft);
+    if (!currentInvoice.logo) currentInvoice.logo = { dataUri: null, width: 180, align: 'left', layout: 'left' };
     if (!currentInvoice.logo.layout) currentInvoice.logo.layout = 'left';
+    activeCompanyProfileId = draftRecord.activeCompanyProfileId || savedDraft.activeCompanyProfileId || savedDraft.companyId || null;
+    // A stale draft record can point at a document that no longer exists
+    // (deleted, or lost to a failed save). Verify the persisted record before
+    // treating the editor content as a saved document, and demote the draft
+    // data so reloads cannot re-infer persistence from a leftover updatedAt.
+    if (savedDraft.updatedAt && savedDraft.id) {
+      try {
+        const persistedRecord = await getInvoice(savedDraft.id);
+        currentDocumentPersisted = Boolean(persistedRecord);
+      } catch (e) {
+        console.warn('Could not verify the persisted draft record:', e);
+        currentDocumentPersisted = false;
+      }
+    } else {
+      currentDocumentPersisted = false;
+    }
+    if (!currentDocumentPersisted) {
+      delete currentInvoice.updatedAt;
+    }
+    // edited === null is the legacy "edited" marker: treat it as edited.
+    documentEdited = draftRecord.edited === null ? true : Boolean(draftRecord.edited);
+    // Legacy drafts predate the numberAuto marker. Infer it once so engine-
+    // issued numbers stay tracked across the upgrade; anything ambiguous is
+    // treated as hand-edited and never regenerated.
+    if (!currentDocumentPersisted &&
+        currentNumberingConfig.mode === 'auto' &&
+        currentInvoice.meta.numberAuto === undefined) {
+      const legacyType = currentInvoice.meta.docType || 'invoice';
+      const legacyExpected = generateForType(legacyType, currentInvoice.meta.date, currentNumberingConfig);
+      currentInvoice.meta.numberAuto = Boolean(legacyExpected) && legacyExpected === currentInvoice.meta.number;
+    }
   } else {
     // If no draft, load default company profile if available
     let defCompany = null;
@@ -756,6 +809,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (defCompany) {
       activeCompanyProfileId = defCompany.id;
+      currentInvoice.companyId = defCompany.id;
       currentInvoice.sender = {
         name: defCompany.name,
         email: defCompany.email || '',
@@ -764,18 +818,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         taxId: defCompany.taxId || ''
       };
       currentInvoice.payment = defCompany.payment || '';
+      currentInvoice.meta.currency = defCompany.defaultCurrency || currentInvoice.meta.currency || '$';
+      currentInvoice.meta.numberFormat = defCompany.defaultNumberFormat ||
+        (currentInvoice.meta.currency === '₹' ? 'indian' : 'international');
     }
-    // Set initial invoice number from numbering engine if auto
+    // Set initial invoice number from the numbering engine if auto. Manual mode
+    // never invents a number; the user types it.
     if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-      await syncNumberingPeriod(currentNumberingConfig);
-      currentInvoice.meta.number = generateDocumentNumber(
-        currentInvoice.meta.docType || 'invoice',
-        currentInvoice.meta.date,
-        currentNumberingConfig,
-        currentNumberingConfig.counter
-      );
+      const type = currentInvoice.meta.docType || 'invoice';
+      currentInvoice.meta.number = generateForType(type, currentInvoice.meta.date, currentNumberingConfig);
+      currentInvoice.meta.numberAuto = true;
+    } else {
+      currentInvoice.meta.number = '';
+      currentInvoice.meta.numberAuto = false;
     }
+    currentDocumentPersisted = false;
+    documentEdited = false;
   }
+  normalizeInvoice(currentInvoice);
 
   // Auto-clean legacy hardcoded dummy payment if business name is not Apex Studio
   if (currentInvoice.sender.name && !currentInvoice.sender.name.toLowerCase().includes('apex')) {
@@ -805,7 +865,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderTaxesEditor();
   setupLogoStudioTabs();
   renderIconsLibrary();
-  try { updateSavedInvoicesCount(); } catch (e) { console.warn(e); }
+  try { await updateSavedInvoicesCount(); } catch (e) { console.warn(e); }
   enhanceAccessibility();
 
   // Initial Sheet Render & Calculations
@@ -816,6 +876,50 @@ document.addEventListener('DOMContentLoaded', async () => {
   attachNavigationListeners();
   attachZoomListeners();
   attachModalListeners();
+  setupCatalogPicker();
+  setupItemLibraryModal();
+  try { await renderCompanyProfilesSelector(); } catch (e) { console.warn(e); }
+  refreshCatalogPicker();
+  updateCatalogSettingsCount();
+
+  // Reports view is mounted once; it stays in the DOM while Compose remains mounted.
+  try {
+    const reportsRoot = document.getElementById('reports-root');
+    if (reportsRoot && typeof mountReportsView === 'function') {
+      mountReportsView(reportsRoot, { onOpenDocument: openDocumentInEditor });
+      reportsMounted = true;
+    }
+  } catch (e) {
+    console.warn('Reports view could not be mounted yet:', e);
+  }
+
+  // App shell boots into #/home by default, but all editor state is already ready.
+  initShell({
+    flushAutosave: flushAutoSave,
+    onSaveCompose: () => { persistCurrentDocument(); },
+    onToggleSidebar: () => { if (toggleSidebarPanel) toggleSidebarPanel(); },
+    printCompose: () => safePrintAction(),
+    onOpenDocument: openDocumentInEditor,
+    onResumeDraft: resumeActiveDraft,
+    onNewDocument: requestNewDocument,
+    onOpenModal: async (id) => {
+      await openAppModal(id);
+    },
+    onRouteChange: async (view) => {
+      if (view === 'compose') {
+        requestAnimationFrame(() => updateDocumentPaginationLive());
+      } else if (view === 'reports' && reportsMounted) {
+        try { await refreshReportsView(); } catch (e) { console.warn('Reports refresh failed:', e); }
+      } else if (view === 'home') {
+        try { await refreshShellCounts(); } catch (e) {}
+      }
+      if (view === 'compose') {
+        syncComposeTitle();
+      }
+    }
+  });
+
+  try { await refreshShellCounts(); } catch (e) {}
 });
 
 // ============================================================================
@@ -874,7 +978,7 @@ function renderColorSwatches() {
 function populateFormFields() {
   normalizeInvoice(currentInvoice);
   const docType = currentInvoice.meta.docType || 'invoice';
-  const cfg = DOC_TYPES[docType] || DOC_TYPES.invoice;
+  const cfg = APP_DOC_TYPES[docType] || APP_DOC_TYPES.invoice;
 
   // Section 1 Document Type Cards Grid
   document.querySelectorAll('#doc-type-cards-grid .doc-type-card').forEach(card => {
@@ -1008,6 +1112,9 @@ function populateFormFields() {
   const iconWordmark = document.getElementById('icon-wordmark');
   if (iconWordmark && !iconWordmark.value) iconWordmark.value = currentInvoice.sender.name;
 
+  // Saved item picker follows the active document (currency, company, dt).
+  refreshCatalogPicker();
+
   // Apply template
   applyTemplateClass();
   updateLogoDisplay();
@@ -1016,7 +1123,7 @@ function populateFormFields() {
 function syncStatusDropdown(docType, currentStatus) {
   const statusSelect = document.getElementById('select-inv-status');
   if (!statusSelect) return;
-  const cfg = DOC_TYPES[docType] || DOC_TYPES.invoice;
+  const cfg = APP_DOC_TYPES[docType] || APP_DOC_TYPES.invoice;
   const validStatusIds = cfg.statuses.map(s => s.id);
 
   statusSelect.innerHTML = cfg.statuses.map(s => `
@@ -1032,10 +1139,17 @@ function syncStatusDropdown(docType, currentStatus) {
 }
 
 async function switchDocumentType(newType) {
-  if (!DOC_TYPES[newType]) return;
+  if (!APP_DOC_TYPES[newType]) return;
+  if (currentDocumentPersisted) {
+    alert('This document is already saved. Create a new document to use a different document type — saved records are never overwritten by a type switch.');
+    populateFormFields();
+    updateSheetView();
+    return;
+  }
+
   const oldType = currentInvoice.meta.docType || 'invoice';
-  const oldCfg = DOC_TYPES[oldType] || DOC_TYPES.invoice;
-  const newCfg = DOC_TYPES[newType];
+  const oldCfg = APP_DOC_TYPES[oldType] || APP_DOC_TYPES.invoice;
+  const newCfg = APP_DOC_TYPES[newType];
 
   currentInvoice.meta.docType = newType;
 
@@ -1044,24 +1158,13 @@ async function switchDocumentType(newType) {
     currentInvoice.meta.title = newCfg.title;
   }
 
-  // Update document number from numbering engine if auto, or standard prefix replacement
+  // Auto numbering uses the new type's independent counter. Manual mode never
+  // rewrites a user-entered number.
   if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-    await syncNumberingPeriod(currentNumberingConfig);
-    currentInvoice.meta.number = generateDocumentNumber(newType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
+    currentInvoice.meta.number = generateForType(newType, currentInvoice.meta.date, currentNumberingConfig);
+    currentInvoice.meta.numberAuto = true;
   } else {
-    const knownPrefixes = ['INV-', 'QT-', 'EST-', 'PI-'];
-    let currentNum = currentInvoice.meta.number || '';
-    let replaced = false;
-    for (const p of knownPrefixes) {
-      if (currentNum.startsWith(p)) {
-        currentInvoice.meta.number = currentNum.replace(p, newCfg.prefix);
-        replaced = true;
-        break;
-      }
-    }
-    if (!replaced) {
-      currentInvoice.meta.number = newCfg.prefix + new Date().getFullYear() + '-001';
-    }
+    currentInvoice.meta.numberAuto = false;
   }
 
   // Update notes if it was default
@@ -1070,81 +1173,141 @@ async function switchDocumentType(newType) {
   }
 
   // If switching to quote/estimate, show signature block by default
-  if (newType !== 'invoice') {
-    currentInvoice.meta.showSignature = true;
-  } else {
-    currentInvoice.meta.showSignature = false;
-  }
-
-  // Set default status for new type
+  currentInvoice.meta.showSignature = (newType !== 'invoice');
   currentInvoice.meta.status = newCfg.defaultStatus;
 
   populateFormFields();
   updateSheetView();
+  syncComposeTitle();
+  refreshCatalogPicker();
   triggerAutoSave();
 }
 
+async function promptManualNumber(docType, suggested = '', excludeId = currentInvoice.id) {
+  const entered = window.prompt(`Enter a unique ${docTypeName(docType)} number:`, suggested || '');
+  if (entered === null) return null;
+  const number = entered.trim();
+  if (!number) {
+    alert('A document number is required.');
+    return null;
+  }
+  if (await findNumberConflict(number, docType, excludeId)) {
+    alert(`The ${docTypeName(docType)} number "${number}" is already used by another saved document. Choose a different number.`);
+    return null;
+  }
+  return number;
+}
+
 async function convertToInvoice() {
-  const oldType = currentInvoice.meta.docType || 'quotation';
-  const oldNumber = currentInvoice.meta.number || 'QT-001';
-  const curDocName = (DOC_TYPES[oldType] || DOC_TYPES.quotation).name;
+  const oldType = activeDocType();
+  if (oldType === 'invoice') return;
+  const oldNumber = currentInvoice.meta.number || '';
+  const curDocName = (APP_DOC_TYPES[oldType] || APP_DOC_TYPES.quotation).name;
 
-  currentInvoice.meta.docType = 'invoice';
-  currentInvoice.meta.title = 'INVOICE';
-
-  // Replace number using Numbering Engine or standard prefix
-  if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-    await syncNumberingPeriod(currentNumberingConfig);
-    currentInvoice.meta.number = generateDocumentNumber('invoice', currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
-  } else {
-    const knownPrefixes = ['QT-', 'EST-', 'PI-'];
-    let currentNum = currentInvoice.meta.number || '';
-    let replaced = false;
-    for (const p of knownPrefixes) {
-      if (currentNum.startsWith(p)) {
-        currentInvoice.meta.number = currentNum.replace(p, 'INV-');
-        replaced = true;
-        break;
-      }
+  try {
+    // A conversion always needs a durable source record. A saved document with
+    // unsaved edits must be re-saved first so the conversion snapshot carries
+    // the live content with freshly frozen totals (re-saving a persisted
+    // source never advances its counter).
+    if (!currentDocumentPersisted || documentEdited) {
+      const saved = await persistCurrentDocument();
+      if (!saved) return;
     }
-    if (!replaced) {
-      currentInvoice.meta.number = 'INV-' + (currentNum || (new Date().getFullYear() + '-001'));
+    if (currentInvoice.convertedToId || currentInvoice.meta?.convertedToId) {
+      alert(`This ${curDocName.toLowerCase()} has already been converted to invoice ${currentInvoice.convertedToNumber || ''}. It cannot be converted twice.`);
+      return;
     }
+
+    let config = rolloverNumberingConfig(currentNumberingConfig);
+    const today = appLocalDateString();
+    let invoiceNumber;
+    if (config.mode === 'manual') {
+      invoiceNumber = await promptManualNumber('invoice');
+      if (!invoiceNumber) return;
+    } else {
+      invoiceNumber = generateForType('invoice', today, config);
+    }
+    if (await findNumberConflict(invoiceNumber, 'invoice', null)) {
+      alert(`The invoice number "${invoiceNumber}" is already in use. Conversion cancelled so no duplicate is stored.`);
+      return;
+    }
+
+    const sourceSnapshot = JSON.parse(JSON.stringify(currentInvoice));
+    // Only the source's own stored company link may be applied. Unlinked
+    // legacy documents must never acquire the active/default company; an
+    // explicitly linked company is never cleared.
+    const company = sourceSnapshot.companyId ? await getCompany(sourceSnapshot.companyId) : null;
+    const records = buildConversionRecords({
+      source: sourceSnapshot,
+      invoiceId: generateId('inv_'),
+      invoiceNumber,
+      now: new Date(today + 'T12:00:00'),
+      company
+    });
+    if (!records || !records.invoice || !records.sourceUpdate) {
+      throw new Error('Conversion record builder returned an invalid result.');
+    }
+
+    // Currency and number format always follow the source quote.
+    records.invoice.meta.currency = sourceSnapshot.meta.currency;
+    records.invoice.meta.numberFormat = sourceSnapshot.meta.numberFormat;
+    records.invoice.companyId = sourceSnapshot.companyId || null;
+    records.invoice.clientId = sourceSnapshot.clientId || null;
+    if (config.mode === 'auto') {
+      // The conversion invoice is generated and persisted in the same
+      // transaction; the marker records engine issuance (it is ignored on
+      // load of persisted records).
+      records.invoice.meta.numberAuto = true;
+      config = advanceTypeCounter(config, 'invoice');
+    }
+
+    await saveConversion({
+      source: records.sourceUpdate,
+      invoice: records.invoice,
+      numberingConfig: config
+    });
+
+    currentNumberingConfig = normalizeNumberingConfig(config);
+    currentInvoice = JSON.parse(JSON.stringify(records.invoice));
+    normalizeInvoice(currentInvoice);
+    currentDocumentPersisted = true;
+    documentEdited = false;
+    populateFormFields();
+    renderLineItemsEditor();
+    renderTaxesEditor();
+    updateSheetView();
+    try { await saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited: false }); } catch (e) { console.warn(e); }
+    navigateTo('compose');
+    requestAnimationFrame(() => updateDocumentPaginationLive());
+    try { await updateSavedInvoicesCount(); } catch (e) {}
+    await notifyDataChanged();
+    syncComposeTitle();
+
+    alert(`⚡ ${curDocName} "${oldNumber}" was converted into invoice "${currentInvoice.meta.number}". The original ${curDocName.toLowerCase()} is preserved with a conversion history link.`);
+  } catch (err) {
+    console.error('Conversion failed:', err);
+    alert('Conversion failed: ' + (err && err.message ? err.message : err));
   }
-
-  // Set PO / Ref if not set
-  if (!currentInvoice.meta.po || currentInvoice.meta.po.trim() === '') {
-    currentInvoice.meta.po = `Ref: ${oldNumber}`;
-  }
-
-  // Set issue date to today and due date to +14 days
-  currentInvoice.meta.date = new Date().toISOString().split('T')[0];
-  currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
-  currentInvoice.meta.status = 'pending';
-  currentInvoice.meta.showSignature = false;
-
-  // If notes matched any non-invoice default (quote/estimate/proforma), switch to invoice default
-  if (currentInvoice.notes === DOC_TYPES.quotation.defaultNotes || currentInvoice.notes === DOC_TYPES.estimate.defaultNotes || currentInvoice.notes === DOC_TYPES.proforma.defaultNotes) {
-    currentInvoice.notes = DOC_TYPES.invoice.defaultNotes;
-  }
-
-  populateFormFields();
-  updateSheetView();
-  triggerAutoSave();
-  alert(`⚡ ${curDocName} "${oldNumber}" was successfully converted into Invoice "${currentInvoice.meta.number}"! All items, rates, taxes, and client details have been preserved.`);
 }
 
 // ============================================================================
 // 5B. MULTIPLE COMPANY PROFILES ENGINE
 // ============================================================================
 let activeCompanyProfileId = null;
+// Saved item library cache (v4 catalogItems store + default-scope setting).
+// Filled once at boot after the DB opens, refreshed after catalog edits and
+// while the item-library modal is open; Compose reads from memory only.
+let catalogItems = [];
+let itemLibraryConfig = { scope: 'global', updatedAt: null };
+let itemLibraryEditing = null; // Record loaded into the modal form for editing
 
 async function updateSavedCompaniesCount() {
   const companies = await getAllCompanies();
   const countEls = [
     document.getElementById('saved-companies-count'),
     document.getElementById('companies-count-badge'),
-    document.getElementById('modal-companies-list-count')
+    document.getElementById('modal-companies-list-count'),
+    document.getElementById('settings-company-count')
   ];
   countEls.forEach(el => {
     if (el) el.textContent = companies.length;
@@ -1156,22 +1319,57 @@ async function renderCompanyProfilesSelector() {
   if (!select) return;
   const companies = await getAllCompanies();
 
+  // The catalog module consumes this read as its known-company set; refresh
+  // it here so bookmark/scope logic always sees the current names/ids.
+  catalogCompanyNameCache = new Map(companies.map(c => [
+    String(c.id),
+    (c && c.name) ? c.name : String(c.id)
+  ]));
+  catalogCompanyNamesResolved = true;
+
+  let linkNormalized = false;
   if (companies.length === 0) {
+    // Every link becomes dangling when the last company goes away.
+    if (activeCompanyProfileId || currentInvoice.companyId) {
+      activeCompanyProfileId = null;
+      currentInvoice.companyId = null;
+      linkNormalized = true;
+    }
     select.innerHTML = `<option value="">Default Company Profile</option><option value="__new__">+ Add New Company Profile...</option>`;
+    if (linkNormalized) {
+      renderLineItemsEditor();
+      refreshCatalogPicker();
+    }
     return;
   }
 
-  // Determine active id if not set
-  if (!activeCompanyProfileId) {
-    const def = companies.find(c => c.isDefault) || companies[0];
-    if (def) activeCompanyProfileId = def.id;
+  // A null/unknown active profile means "no company linked" (legacy or
+  // unlinked documents). It must NOT silently adopt the default company.
+  const isLinked = Boolean(activeCompanyProfileId) &&
+    companies.some(c => c.id === activeCompanyProfileId);
+  if (activeCompanyProfileId && !isLinked) {
+    // Dangling reference (deleted company / stale backup): normalize to no link.
+    activeCompanyProfileId = null;
+    linkNormalized = true;
   }
+  if (currentInvoice.companyId && !companies.some(c => c.id === currentInvoice.companyId)) {
+    currentInvoice.companyId = null;
+    linkNormalized = true;
+  }
+  const noLinkOption = isLinked
+    ? ''
+    : `<option value="" ${activeCompanyProfileId ? '' : 'selected'}>No company linked</option>`;
 
   select.innerHTML = companies.map(c => `
-    <option value="${escapeHtml(c.id)}" ${c.id === activeCompanyProfileId ? 'selected' : ''}>
-      🏢 ${escapeHtml(c.name)}${c.isDefault ? ' (Default)' : ''}
+    <option value="${appEscapeHtml(c.id)}" ${c.id === activeCompanyProfileId ? 'selected' : ''}>
+      🏢 ${appEscapeHtml(c.name)}${c.isDefault ? ' (Default)' : ''}
     </option>
-  `).join('') + `<option value="__new__">+ Add New Company Profile...</option>`;
+  `).join('') + noLinkOption + `<option value="__new__">+ Add New Company Profile...</option>`;
+
+  if (linkNormalized) {
+    renderLineItemsEditor();
+    refreshCatalogPicker();
+  }
 }
 
 async function renderCompaniesModalList() {
@@ -1192,19 +1390,23 @@ async function renderCompaniesModalList() {
   container.innerHTML = companies.map(comp => {
     const isDef = !!comp.isDefault;
     const isCurrentActive = comp.id === activeCompanyProfileId;
-    const safeId = escapeHtml(comp.id);
+    const safeId = appEscapeHtml(comp.id);
     return `
       <div class="company-card-item ${isDef ? 'is-default' : ''}" data-id="${safeId}">
         <div style="flex:1; padding-right:12px;">
           <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
-            ${escapeHtml(comp.name)}
+            ${appEscapeHtml(comp.name)}
             ${isDef ? '<span class="badge-company-default">DEFAULT</span>' : ''}
             ${isCurrentActive ? '<span style="font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:4px; background:#dcfce7; color:#16a34a; text-transform:uppercase;">ACTIVE</span>' : ''}
           </div>
           <div style="font-size:11.5px; color:#64748b; margin-top:2px;">
-            ${escapeHtml(comp.email || '')}${comp.phone ? ' • ' + escapeHtml(comp.phone) : ''}${comp.taxId ? ' • Tax: ' + escapeHtml(comp.taxId) : ''}
+            ${appEscapeHtml(comp.email || '')}${comp.phone ? ' • ' + appEscapeHtml(comp.phone) : ''}${comp.taxId ? ' • Tax: ' + appEscapeHtml(comp.taxId) : ''}
           </div>
-          ${comp.address ? `<div style="font-size:11px; color:#94a3b8; margin-top:2px; white-space:pre-line;">${escapeHtml(comp.address)}</div>` : ''}
+          <div style="font-size:11px; color:#475569; margin-top:2px;">
+            Default currency: <strong>${appEscapeHtml(comp.defaultCurrency || '$')}</strong>
+            &bull; ${appEscapeHtml((comp.defaultNumberFormat || 'international') === 'indian' ? 'Indian number format' : 'International number format')}
+          </div>
+          ${comp.address ? `<div style="font-size:11px; color:#94a3b8; margin-top:2px; white-space:pre-line;">${appEscapeHtml(comp.address)}</div>` : ''}
           ${comp.payment ? `<div style="font-size:10.5px; color:#0369a1; background:#f0f9ff; padding:3px 6px; border-radius:4px; margin-top:4px; display:inline-block;">Bank/Payment Remittance Saved</div>` : ''}
         </div>
         <div style="display:flex; gap:6px; align-items:center;">
@@ -1253,6 +1455,8 @@ async function renderCompaniesModalList() {
         document.getElementById('modal-company-address').value = comp.address || '';
         document.getElementById('modal-company-taxid').value = comp.taxId || '';
         document.getElementById('modal-company-payment').value = comp.payment || '';
+        document.getElementById('modal-company-currency').value = comp.defaultCurrency || '$';
+        document.getElementById('modal-company-number-format').value = comp.defaultNumberFormat || 'international';
         document.getElementById('modal-company-is-default').checked = !!comp.isDefault;
         document.getElementById('company-form-heading').textContent = `Edit Company: ${comp.name}`;
         document.getElementById('btn-cancel-company-edit').style.display = 'inline-block';
@@ -1264,10 +1468,20 @@ async function renderCompaniesModalList() {
   container.querySelectorAll('.btn-del-company').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (confirm('Permanently delete this company profile?')) {
-        await deleteCompany(btn.dataset.id);
-        if (activeCompanyProfileId === btn.dataset.id) activeCompanyProfileId = null;
+        const deletedId = String(btn.dataset.id || '');
+        await deleteCompany(deletedId);
+        if (deletedId && (deletedId === activeCompanyProfileId || deletedId === currentInvoice.companyId)) {
+          // A linked document must not keep scoping catalog items against a
+          // deleted company: drop the link and rebuild the dependent UI.
+          activeCompanyProfileId = null;
+          currentInvoice.companyId = null;
+          renderLineItemsEditor();
+          updateSheetView();
+        }
+        refreshCatalogPicker();
         await renderCompanyProfilesSelector();
         await renderCompaniesModalList();
+        await notifyDataChanged();
       }
     });
   });
@@ -1276,6 +1490,7 @@ async function renderCompaniesModalList() {
 function applyCompanyToInvoice(comp) {
   if (!comp) return;
   activeCompanyProfileId = comp.id;
+  currentInvoice.companyId = comp.id;
   currentInvoice.sender = {
     name: comp.name || '',
     email: comp.email || '',
@@ -1284,6 +1499,21 @@ function applyCompanyToInvoice(comp) {
     taxId: comp.taxId || ''
   };
   currentInvoice.payment = comp.payment || '';
+
+  // Currency defaults apply to new documents. On an already persisted document
+  // the user must explicitly confirm a currency change.
+  const targetCurrency = String(comp.defaultCurrency || '').trim();
+  if (targetCurrency && targetCurrency !== currentInvoice.meta.currency) {
+    const shouldChange = !currentDocumentPersisted ||
+      confirm(`This company's default currency is ${targetCurrency}. Change the document currency from ${currentInvoice.meta.currency || '$'} to ${targetCurrency}?`);
+    if (shouldChange) {
+      currentInvoice.meta.currency = targetCurrency;
+      currentInvoice.meta.numberFormat = comp.defaultNumberFormat ||
+        (targetCurrency === '₹' ? 'indian' : 'international');
+    }
+  } else if (targetCurrency && !currentDocumentPersisted && comp.defaultNumberFormat) {
+    currentInvoice.meta.numberFormat = comp.defaultNumberFormat;
+  }
 
   // If Utharam company is selected, auto-configure official Utharam brand mark
   if (comp.name && comp.name.toLowerCase().includes('utharam') && (!currentInvoice.logo.dataUri || currentInvoice.logo.dataUri.startsWith('data:image/svg+xml'))) {
@@ -1307,9 +1537,26 @@ function applyCompanyToInvoice(comp) {
   }
 
   populateFormFields();
+  renderLineItemsEditor();
   updateSheetView();
+  refreshCatalogPicker();
   triggerAutoSave();
   renderCompanyProfilesSelector();
+}
+
+/**
+ * Manual rebranding: hand-editing the sender fields detaches the document
+ * from the stored company profile (the link fields only — the sender snapshot
+ * keeps the typed text), so Reports can never attribute a manually rebranded
+ * document to the old company. Programmatic company application
+ * (applyCompanyToInvoice) must NOT call this.
+ */
+function detachCompanyLink() {
+  activeCompanyProfileId = null;
+  currentInvoice.companyId = null;
+  // The scope hint and any company-tagged picker rows must not reference the
+  // dropped link (manual rebranding can happen on every sender keystroke).
+  refreshCatalogPicker();
 }
 
 async function saveCompanyFromModal() {
@@ -1325,9 +1572,14 @@ async function saveCompanyFromModal() {
   const address = document.getElementById('modal-company-address').value.trim();
   const taxId = document.getElementById('modal-company-taxid').value.trim();
   const payment = document.getElementById('modal-company-payment').value.trim();
+  const defaultCurrency = document.getElementById('modal-company-currency').value.trim() || '$';
+  const defaultNumberFormat = document.getElementById('modal-company-number-format').value || 'international';
   const isDefault = document.getElementById('modal-company-is-default').checked;
 
-  const company = {
+  // Merge into the existing record so createdAt, default fields, and any
+  // unknown fields survive editing.
+  const existing = id ? await getCompany(id) : null;
+  const company = Object.assign({}, existing || {}, {
     id: id || generateId('comp_'),
     name,
     email,
@@ -1335,17 +1587,30 @@ async function saveCompanyFromModal() {
     address,
     taxId,
     payment,
+    defaultCurrency,
+    defaultNumberFormat,
     isDefault
-  };
+  });
+  if (!company.createdAt) company.createdAt = Date.now();
 
   await saveCompany(company);
   if (isDefault) {
     await setDefaultCompany(company.id);
+  } else {
+    const companies = await getAllCompanies();
+    if (!companies.some(c => c.isDefault)) {
+      const fallback = companies.find(c => c.id !== company.id) || companies[0];
+      if (fallback) await setDefaultCompany(fallback.id);
+    }
   }
 
   resetCompanyModalForm();
   await renderCompanyProfilesSelector();
   await renderCompaniesModalList();
+  await notifyDataChanged();
+  // Names may have changed: refresh the label cache and the picker/hint so
+  // scope hints and scope tags never show a stale company name.
+  refreshCatalogPicker();
   alert(`Company profile "${company.name}" saved successfully!`);
 }
 
@@ -1357,6 +1622,8 @@ function resetCompanyModalForm() {
   document.getElementById('modal-company-address').value = '';
   document.getElementById('modal-company-taxid').value = '';
   document.getElementById('modal-company-payment').value = '';
+  document.getElementById('modal-company-currency').value = '$';
+  document.getElementById('modal-company-number-format').value = 'international';
   document.getElementById('modal-company-is-default').checked = false;
   document.getElementById('company-form-heading').textContent = 'Add New Company Profile';
   document.getElementById('btn-cancel-company-edit').style.display = 'none';
@@ -1420,12 +1687,23 @@ function renderLineItemsEditor() {
     const standardRates = [0, 5, 12, 18, 28];
     const isStandard = standardRates.includes(taxRate);
 
+    // Bookmark state: filled when this line already matches a saved catalog
+    // item under the current save scope/company/currency/description.
+    const savedCatalogVersion = findSavedCatalogForItem(item);
+    const isSavedToCatalog = Boolean(savedCatalogVersion);
+    const saveBookmarkTitle = isSavedToCatalog
+      ? 'Update saved item'
+      : 'Save to item library';
+
     return `
       <div class="item-card-editor" data-index="${index}">
-        <!-- Row 1: Description + HSN/SAC + Delete -->
+        <!-- Row 1: Description + HSN/SAC + Bookmark save + Delete -->
         <div class="item-card-row-1">
-          <input type="text" class="form-input item-desc-input" value="${escapeHtml(item.description)}" placeholder="Service or Item Description">
-          <input type="text" class="form-input item-hsn-input" value="${escapeHtml(item.hsn || '')}" placeholder="HSN/SAC" title="HSN/SAC Code (e.g. 998314)">
+          <input type="text" class="form-input item-desc-input" value="${appEscapeHtml(item.description)}" placeholder="Service or Item Description">
+          <input type="text" class="form-input item-hsn-input" value="${appEscapeHtml(item.hsn || '')}" placeholder="HSN/SAC" title="HSN/SAC Code (e.g. 998314)">
+          <button type="button" class="btn-icon btn-save-catalog${isSavedToCatalog ? ' is-saved' : ''}" title="${saveBookmarkTitle}" aria-label="${saveBookmarkTitle}" aria-pressed="${isSavedToCatalog}" data-catalog-saved-id="${isSavedToCatalog ? appEscapeHtml(savedCatalogVersion.id) : ''}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+          </button>
           <button class="btn btn-danger btn-sm btn-icon btn-delete-item" title="Delete line item" ${currentInvoice.items.length <= 1 ? 'disabled style="opacity:0.3; cursor:not-allowed;"' : ''}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
           </button>
@@ -1470,6 +1748,9 @@ function renderLineItemsEditor() {
     const idx = parseInt(card.dataset.index, 10);
     card.querySelector('.item-desc-input').addEventListener('input', (e) => {
       currentInvoice.items[idx].description = e.target.value;
+      // The catalog dedupe key includes the description: refresh this card's
+      // bookmark state in place instead of re-rendering the whole editor.
+      updateCatalogBookmarkState(card, idx);
       updateSheetView();
       triggerAutoSave();
     });
@@ -1531,6 +1812,802 @@ function renderLineItemsEditor() {
         triggerAutoSave();
       });
     }
+    const saveCatalogBtn = card.querySelector('.btn-save-catalog');
+    if (saveCatalogBtn) {
+      saveCatalogBtn.addEventListener('click', async () => {
+        await saveLineItemToCatalog(idx);
+      });
+    }
+  });
+}
+
+// ============================================================================
+// 5B. SAVED ITEM LIBRARY (Module 5 picker + bookmark save + Settings manager)
+// ============================================================================
+// In-memory mirrors of the v4 catalog data (`catalogItems` store and the
+// `itemLibraryConfig` setting) are loaded once at boot; writes go through
+// js/db.js and update the cache immediately. Catalog edits never touch saved
+// invoices or the active draft — they only write to `catalogItems`.
+let catalogCompanyNameCache = new Map(); // companyId -> display name
+let catalogCompanyNamesResolved = false; // cache contains a real company list?
+let catalogStatusTimer = null;
+let itemLibraryStatusTimer = null;
+
+/** Canonical currency key of the active document (drives picker filtering). */
+function catalogCurrencyKey() {
+  return normalizeCurrency(currentInvoice.meta.currency || '$').key;
+}
+
+/**
+ * Active company link: current document link wins, else the shell selector.
+ * The id is validated against the known company list so deleted/dangling
+ * links can never scope catalog saves or picker grouping — such links return
+ * null (treated like "no company").
+ */
+function catalogActiveCompanyId() {
+  const candidate = currentInvoice.companyId || activeCompanyProfileId || null;
+  if (!candidate) return null;
+  const key = String(candidate).trim();
+  // Company list not loaded yet (very early boot / transient): fall back to
+  // the raw link so the UI never spuriously blocks company-scope actions.
+  if (!catalogCompanyNamesResolved) return key;
+  return catalogCompanyNameCache.has(key) ? key : null;
+}
+
+/** Sync display label for a company id, best-effort from the name cache. */
+function catalogCompanyLabel(companyId) {
+  if (!companyId) return '';
+  return catalogCompanyNameCache.get(String(companyId)) || '';
+}
+
+/** Keeps the companyId->name cache fresh; a failed read only risks labels. */
+function refreshCatalogCompanyNameCache() {
+  return getAllCompanies()
+    .then(companies => {
+      catalogCompanyNameCache = new Map((companies || []).map(c => [
+        String(c.id),
+        (c && c.name) ? c.name : String(c.id)
+      ]));
+      catalogCompanyNamesResolved = true;
+    })
+    .catch(() => {
+      // An unreadable company list cannot vouch for any link: treat as empty
+      // so stale/deleted ids are never used as a catalog save scope.
+      catalogCompanyNameCache = new Map();
+      catalogCompanyNamesResolved = true;
+    });
+}
+
+/** Adds or replaces one record in the cache array (db returns newest first). */
+function upsertCatalogItemInCache(record) {
+  if (!record || !record.id) return;
+  const idx = catalogItems.findIndex(c => c && c.id === record.id);
+  if (idx >= 0) catalogItems[idx] = record;
+  else catalogItems.unshift(record);
+}
+
+/** The scope new saves should use, honoring the configured default. */
+function getCatalogSaveContext() {
+  const scope = normalizeCatalogScope(itemLibraryConfig ? itemLibraryConfig.scope : 'global');
+  const activeCompanyId = catalogActiveCompanyId();
+  return {
+    scope,
+    companyId: scope === 'company' ? activeCompanyId : null,
+    hasCompanyScopeBlocker: scope === 'company' && !activeCompanyId
+  };
+}
+
+/**
+ * The saved version of a line item under the current save scope/company/
+ * currency/description — drives the bookmark's filled "saved" state.
+ */
+function findSavedCatalogForItem(lineItem) {
+  if (!lineItem || typeof lineItem !== 'object') return null;
+  const ctx = getCatalogSaveContext();
+  const candidate = buildCatalogCandidateFromLineItem(lineItem, {
+    scope: ctx.scope,
+    companyId: ctx.companyId,
+    currency: currentInvoice.meta.currency || '$',
+    currencyKey: catalogCurrencyKey()
+  });
+  return findCatalogMatch(catalogItems, candidate);
+}
+
+/**
+ * Refreshes one bookmark button's saved/unsaved state in place (class,
+ * aria-pressed, title and data id) without rebuilding the whole item editor.
+ * The dedupe key only depends on scope/company/currency/description, so this
+ * runs on description edits; the editor is re-rendered wholly whenever the
+ * catalog itself changes.
+ */
+function updateCatalogBookmarkState(card, index) {
+  const btn = card && card.querySelector ? card.querySelector('.btn-save-catalog') : null;
+  if (!btn) return;
+  const item = currentInvoice.items[index];
+  if (!item) return;
+  const savedVersion = findSavedCatalogForItem(item);
+  const isSaved = Boolean(savedVersion);
+  const title = isSaved ? 'Update saved item' : 'Save to item library';
+  btn.classList.toggle('is-saved', isSaved);
+  btn.setAttribute('aria-pressed', isSaved ? 'true' : 'false');
+  btn.setAttribute('aria-label', title);
+  btn.setAttribute('title', title);
+  // setAttribute writes the raw value (no HTML escaping needed here).
+  btn.setAttribute('data-catalog-saved-id', isSaved ? savedVersion.id : '');
+}
+
+/** "Saved/Added to <x>" feedback for the Module 5 picker (timed clear). */
+function setCatalogStatus(message) {
+  const el = document.getElementById('catalog-status');
+  if (!el) return;
+  el.textContent = message || '';
+  if (catalogStatusTimer) { clearTimeout(catalogStatusTimer); catalogStatusTimer = null; }
+  if (message) {
+    catalogStatusTimer = setTimeout(() => {
+      el.textContent = '';
+      catalogStatusTimer = null;
+    }, 5000);
+  }
+}
+
+/** Same feedback pattern for the item-library modal. */
+function setItemLibraryStatus(message) {
+  const el = document.getElementById('item-library-status');
+  if (!el) return;
+  el.textContent = message || '';
+  if (itemLibraryStatusTimer) { clearTimeout(itemLibraryStatusTimer); itemLibraryStatusTimer = null; }
+  if (message) {
+    itemLibraryStatusTimer = setTimeout(() => {
+      el.textContent = '';
+      itemLibraryStatusTimer = null;
+    }, 5000);
+  }
+}
+
+/** Scope hint under the picker eyebrow: where new bookmark saves will land. */
+function updateCatalogScopeHint() {
+  const el = document.getElementById('catalog-scope-hint');
+  if (!el) return;
+  const scope = normalizeCatalogScope(itemLibraryConfig ? itemLibraryConfig.scope : 'global');
+  if (scope !== 'company') {
+    el.textContent = 'New saves go to Global items';
+    return;
+  }
+  const companyId = catalogActiveCompanyId();
+  if (!companyId) {
+    el.textContent = 'Link a company to save company items';
+    return;
+  }
+  el.textContent = `New saves go to ${catalogCompanyLabel(companyId) || 'your linked company'}`;
+}
+
+/** Refresh the picker hint + open results after company/currency/doc changes. */
+function refreshCatalogPicker() {
+  refreshCatalogCompanyNameCache().then(() => {
+    updateCatalogScopeHint();
+    if (isCatalogResultsOpen()) showCatalogResults();
+  });
+  updateCatalogScopeHint();
+  if (isCatalogResultsOpen()) showCatalogResults();
+}
+
+/** Whether the picker dropdown is showing right now. */
+function isCatalogResultsOpen() {
+  const resultsEl = document.getElementById('catalog-results');
+  if (!resultsEl || resultsEl.hidden) return false;
+  const searchEl = document.getElementById('catalog-search');
+  return Boolean(searchEl && (searchEl === document.activeElement || resultsEl.contains(document.activeElement)));
+}
+
+function hideCatalogResults() {
+  const resultsEl = document.getElementById('catalog-results');
+  const searchEl = document.getElementById('catalog-search');
+  if (searchEl) searchEl.setAttribute('aria-expanded', 'false');
+  if (resultsEl) resultsEl.hidden = true;
+}
+
+function catalogResultRowHTML(item) {
+  const currency = (item.currency && typeof item.currency === 'string')
+    ? item.currency
+    : currentInvoice.meta.currency;
+  const price = formatMoney(item.rate, currency, currentInvoice.meta.numberFormat || 'international');
+  const scope = normalizeCatalogScope(item.scope);
+  const scopeTag = scope === 'company' ? (catalogCompanyLabel(item.companyId) || 'Company') : 'Global';
+  return `
+    <button type="button" class="catalog-result-row" data-catalog-add="${appEscapeHtml(item.id)}" title="Add this saved item as a new line item">
+      <span class="catalog-result-main">
+        <span class="catalog-result-desc">${appEscapeHtml(item.description)}</span>
+        <span class="catalog-result-meta">
+          ${item.hsn ? `<span class="item-hsn-tag">HSN ${appEscapeHtml(item.hsn)}</span>` : ''}
+          <span class="catalog-price">${appEscapeHtml(price)}</span>
+          <span class="catalog-tax-badge">${Number(item.taxRate) || 0}% tax</span>
+        </span>
+      </span>
+      <span class="catalog-scope-tag ${scope === 'company' ? 'is-company' : 'is-global'}">${appEscapeHtml(scopeTag)}</span>
+    </button>`;
+}
+
+function catalogResultEmptyHTML(search) {
+  const trimmed = (typeof search === 'string') ? search.trim() : '';
+  const note = trimmed
+    ? 'No saved items match this search.'
+    : 'No saved items in this currency yet.';
+  return `
+    <div class="catalog-empty">
+      <span>${note}</span>
+      <button type="button" class="btn btn-secondary btn-sm" data-catalog-manage>Manage items</button>
+    </div>`;
+}
+
+/** Renders the grouped global/company dropdown from the current cache. */
+function showCatalogResults() {
+  const searchEl = document.getElementById('catalog-search');
+  const resultsEl = document.getElementById('catalog-results');
+  if (!searchEl || !resultsEl) return;
+  searchEl.setAttribute('aria-expanded', 'true');
+  const search = searchEl.value;
+  const groups = groupCatalogItemsForView(catalogItems, {
+    search,
+    currencyKey: catalogCurrencyKey(),
+    companyId: catalogActiveCompanyId()
+  });
+  if (groups.length === 0) {
+    resultsEl.innerHTML = catalogResultEmptyHTML(search);
+  } else {
+    resultsEl.innerHTML = groups.map(group => {
+      return `<div class="catalog-group-label">${appEscapeHtml(group.label)}</div>` +
+        group.items.map(catalogResultRowHTML).join('');
+    }).join('');
+  }
+  resultsEl.hidden = false;
+}
+
+/** Repeated listeners: static wiring only, never per rendered row. */
+function setupCatalogPicker() {
+  const searchEl = document.getElementById('catalog-search');
+  const resultsEl = document.getElementById('catalog-results');
+  const manageBtn = document.getElementById('btn-manage-catalog');
+
+  if (searchEl) {
+    searchEl.addEventListener('focus', () => { showCatalogResults(); });
+    searchEl.addEventListener('input', () => { showCatalogResults(); });
+  }
+
+  if (manageBtn) {
+    manageBtn.addEventListener('click', async () => {
+      // Never let the dropdown linger under the manager modal.
+      hideCatalogResults();
+      await openAppModal('modal-item-library');
+    });
+  }
+
+  // One delegated click target for all result rows and the empty-state
+  // Manage button; rows are re-rendered on every search change, so per-row
+  // bindings would leak and never stay in sync.
+  if (resultsEl) {
+    resultsEl.addEventListener('click', async (e) => {
+      const manageTrigger = e.target.closest('[data-catalog-manage]');
+      if (manageTrigger) {
+        hideCatalogResults();
+        await openAppModal('modal-item-library');
+        return;
+      }
+      const addBtn = e.target.closest('[data-catalog-add]');
+      if (!addBtn) return;
+      hideCatalogResults();
+      await addLineItemFromCatalog(addBtn.getAttribute('data-catalog-add'));
+    });
+  }
+
+  // Closing the manager (×, Close footer, Escape-cancel) dismisses any
+  // lingering dropdown and re-syncs the picker with the post-edit catalog.
+  const libraryModal = document.getElementById('modal-item-library');
+  if (libraryModal) {
+    libraryModal.addEventListener('close', () => {
+      hideCatalogResults();
+      refreshCatalogPicker();
+    });
+  }
+
+  // Close the dropdown on any click outside the picker.
+  document.addEventListener('click', (e) => {
+    const picker = document.getElementById('catalog-picker');
+    if (!picker || picker.contains(e.target)) return;
+    hideCatalogResults();
+  });
+
+  // Escape closes the dropdown (and blurs) without touching open dialogs.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const openResults = document.getElementById('catalog-results');
+    if (openResults && !openResults.hidden) {
+      hideCatalogResults();
+      const focusedSearch = document.getElementById('catalog-search');
+      if (focusedSearch && focusedSearch === document.activeElement) focusedSearch.blur();
+    }
+  });
+}
+
+/**
+ * Adds a saved catalog item to the document as a new line item (qty 1, saved
+ * price/tax/HSN, discount 0) and bumps its usage counters as a non-blocking
+ * write. The line item itself is plain document data — no catalog ids or
+ * currency fields leak into the invoice.
+ */
+async function addLineItemFromCatalog(catalogId) {
+  if (!catalogId) return;
+  const item = catalogItems.find(c => c && c.id === catalogId);
+  if (!item) {
+    setCatalogStatus('That saved item is no longer in the library.');
+    showCatalogResults();
+    return;
+  }
+
+  currentInvoice.items.push(catalogItemToLineItem(item));
+  renderLineItemsEditor();
+  updateSheetView();
+  triggerAutoSave();
+
+  const searchEl = document.getElementById('catalog-search');
+  if (searchEl) searchEl.value = '';
+  hideCatalogResults();
+  setCatalogStatus(`Added ${item.description}`);
+
+  (async () => {
+    try {
+      const bumped = await saveCatalogItem({
+        ...item,
+        usageCount: (Number(item.usageCount) || 0) + 1,
+        lastUsedAt: Date.now()
+      });
+      upsertCatalogItemInCache(bumped);
+    } catch (e) {
+      console.warn('Could not update saved item usage counters:', e);
+    }
+  })();
+}
+
+/**
+ * Bookmark action for a line item card: save it to the library, or update the
+ * existing match (scope + company + currency + description dedupe). Success
+ * feedback goes to the picker status line, never an alert.
+ */
+async function saveLineItemToCatalog(index) {
+  const item = currentInvoice.items[index];
+  if (!item || typeof item !== 'object') return;
+  const description = (typeof item.description === 'string') ? item.description.trim() : '';
+  if (!description) {
+    alert('Add a description before saving this line item to the item library.');
+    return;
+  }
+
+  const ctx = getCatalogSaveContext();
+  if (ctx.hasCompanyScopeBlocker) {
+    alert('Link a company to this document or switch the item library to Shared in Settings.');
+    return;
+  }
+
+  const currency = currentInvoice.meta.currency || '$';
+  const currencyKey = normalizeCurrency(currency).key;
+  const candidate = buildCatalogCandidateFromLineItem(item, {
+    scope: ctx.scope,
+    companyId: ctx.companyId,
+    currency,
+    currencyKey
+  });
+  const existing = findCatalogMatch(catalogItems, candidate);
+
+  // Updates keep the stored id, createdAt and usage counters; new records are
+  // normalized (clamps, descriptionKey, currencyKey) by saveCatalogItem.
+  const record = Object.assign({}, candidate, existing ? {
+    id: existing.id,
+    createdAt: existing.createdAt,
+    usageCount: existing.usageCount,
+    lastUsedAt: existing.lastUsedAt
+  } : {});
+
+  try {
+    const savedRecord = await saveCatalogItem(record);
+    upsertCatalogItemInCache(savedRecord);
+    renderLineItemsEditor();
+    updateCatalogSettingsCount();
+    updateCatalogScopeHint();
+    if (isCatalogResultsOpen()) showCatalogResults();
+    const scopeLabel = savedRecord.scope === 'company'
+      ? (catalogCompanyLabel(savedRecord.companyId) || 'your company')
+      : 'Global items';
+    setCatalogStatus(existing ? `Updated ${savedRecord.description}` : `Saved to ${scopeLabel}`);
+  } catch (e) {
+    console.warn('Could not save line item to the library:', e);
+    alert('Could not save this line item to the item library. ' + (e && e.message ? e.message : ''));
+  }
+}
+
+// ---- Item library manager (Settings modal) --------------------------------
+
+function updateCatalogSettingsCount() {
+  const el = document.getElementById('settings-catalog-count');
+  if (el) el.textContent = String(catalogItems.length);
+}
+
+function renderItemLibraryScopeRadios() {
+  const scope = normalizeCatalogScope(itemLibraryConfig ? itemLibraryConfig.scope : 'global');
+  document.querySelectorAll('input[name="item-library-scope"]').forEach(radio => {
+    radio.checked = normalizeCatalogScope(radio.value) === scope;
+  });
+}
+
+/**
+ * Loads modal data, resets the form/search and renders the grouped list.
+ * Called by openAppModal() every time the dialog opens, so the view never
+ * shows a stale cache after external changes.
+ */
+async function openItemLibraryManager() {
+  hideCatalogResults();
+  try {
+    catalogItems = await getAllCatalogItems();
+  } catch (e) {
+    console.warn('Item library refresh failed:', e);
+  }
+  try {
+    itemLibraryConfig = await getItemLibraryConfig();
+  } catch (e) {
+    console.warn('Item library scope refresh failed:', e);
+    itemLibraryConfig = { scope: 'global', updatedAt: null };
+  }
+  itemLibraryEditing = null;
+  hideItemLibraryForm();
+  renderItemLibraryScopeRadios();
+  updateCatalogSettingsCount();
+  const searchEl = document.getElementById('item-library-search');
+  if (searchEl) searchEl.value = '';
+  setItemLibraryStatus('');
+  await refreshCatalogCompanyNameCache();
+  await renderItemLibraryList();
+  refreshCatalogPicker();
+}
+
+function updateCatalogFormCompanyState(hasCompanies) {
+  const scopeEl = document.getElementById('item-library-scope');
+  const companyEl = document.getElementById('item-library-company');
+  const hintEl = document.getElementById('item-library-company-hint');
+  const isCompany = Boolean(scopeEl) && normalizeCatalogScope(scopeEl.value) === 'company';
+  if (companyEl) companyEl.disabled = !isCompany;
+  if (hintEl && hasCompanies !== undefined) {
+    if (isCompany && !hasCompanies) {
+      hintEl.textContent = 'No saved companies yet — keep items shared, or add one in Companies first.';
+    } else if (isCompany) {
+      hintEl.textContent = 'Only documents linked to this company will see it.';
+    } else {
+      hintEl.textContent = '';
+    }
+  }
+}
+
+/** Populates the company select; an empty library keeps Global scope usable. */
+async function populateItemLibraryCompanySelect(selectedId) {
+  const select = document.getElementById('item-library-company');
+  if (!select) return false;
+  let companies = [];
+  try {
+    companies = await getAllCompanies();
+  } catch (e) {
+    console.warn('Company list for item library failed:', e);
+  }
+  const hasCompanies = companies.length > 0;
+  if (!hasCompanies) {
+    select.innerHTML = `<option value="">No companies saved yet &mdash; link one in Companies</option>`;
+  } else {
+    select.innerHTML = `<option value="">Choose a company&hellip;</option>` +
+      companies.map(c => `<option value="${appEscapeHtml(c.id)}">${appEscapeHtml((c && c.name) || 'Company')}</option>`).join('');
+    if (selectedId) select.value = String(selectedId);
+    if (!select.value && selectedId && companies.some(c => String(c.id) === String(selectedId))) {
+      select.value = String(selectedId);
+    }
+  }
+  updateCatalogFormCompanyState(hasCompanies);
+  return hasCompanies;
+}
+
+function itemLibraryRowHTML(item) {
+  const currency = (item.currency && typeof item.currency === 'string')
+    ? item.currency
+    : currentInvoice.meta.currency;
+  const price = formatMoney(item.rate, currency, currentInvoice.meta.numberFormat || 'international');
+  const scope = normalizeCatalogScope(item.scope);
+  const scopeTag = scope === 'company' ? (catalogCompanyLabel(item.companyId) || 'Company') : 'Global';
+  const taxRate = Number(item.taxRate) || 0;
+  return `
+    <div class="item-library-row" data-item-library-row="${appEscapeHtml(item.id)}">
+      <div class="item-library-row-main">
+        <div class="item-library-row-desc">${appEscapeHtml(item.description)}</div>
+        <div class="item-library-row-meta">
+          <span class="catalog-price">${appEscapeHtml(price)}</span>
+          <span>${taxRate}% tax</span>
+          ${item.hsn ? `<span>HSN ${appEscapeHtml(item.hsn)}</span>` : ''}
+        </div>
+      </div>
+      <span class="catalog-scope-tag ${scope === 'company' ? 'is-company' : 'is-global'}">${appEscapeHtml(scopeTag)}</span>
+      <div class="item-library-row-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-item-library-edit="${appEscapeHtml(item.id)}" title="Edit this item">Edit</button>
+        <button type="button" class="btn btn-danger btn-sm btn-icon" data-item-library-remove="${appEscapeHtml(item.id)}" title="Delete this item">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        </button>
+      </div>
+    </div>`;
+}
+
+/** Grouped list (Shared first) filtered by description/HSN search. */
+async function renderItemLibraryList() {
+  const listEl = document.getElementById('item-library-list');
+  const countEl = document.getElementById('item-library-count');
+  if (!listEl) return;
+  const searchEl = document.getElementById('item-library-search');
+  const needle = searchEl ? searchEl.value.trim().toLowerCase() : '';
+  const matchesSearch = (item) => {
+    if (!needle) return true;
+    const description = (typeof item.description === 'string') ? item.description.toLowerCase() : '';
+    if (description.includes(needle)) return true;
+    const hsn = (item.hsn === undefined || item.hsn === null) ? '' : String(item.hsn).toLowerCase();
+    return hsn.includes(needle);
+  };
+
+  const globalItems = catalogItems.filter(i => i && typeof i === 'object' &&
+    normalizeCatalogScope(i.scope) === 'global' && matchesSearch(i));
+  const companyItems = catalogItems.filter(i => i && typeof i === 'object' &&
+    normalizeCatalogScope(i.scope) === 'company' && matchesSearch(i));
+  const shown = globalItems.length + companyItems.length;
+  const total = catalogItems.length;
+
+  if (countEl) {
+    countEl.textContent = shown === total
+      ? `${total} item${total === 1 ? '' : 's'}`
+      : `${shown} of ${total} items`;
+  }
+
+  if (shown === 0) {
+    listEl.innerHTML = `<div class="item-library-empty">${needle
+      ? 'No saved items match this search.'
+      : 'No saved items yet. Save line items from Compose, or add one here.'}</div>`;
+    return;
+  }
+
+  let html = '';
+  if (globalItems.length > 0) {
+    html += `<div class="catalog-group-label">Global items</div>` + globalItems.map(itemLibraryRowHTML).join('');
+  }
+  if (companyItems.length > 0) {
+    html += `<div class="catalog-group-label">Company items</div>` + companyItems.map(itemLibraryRowHTML).join('');
+  }
+  listEl.innerHTML = html;
+
+  // Row bindings are re-attached per render like the other modal lists.
+  listEl.querySelectorAll('[data-item-library-edit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = catalogItems.find(c => c && c.id === btn.getAttribute('data-item-library-edit'));
+      if (item) showItemLibraryForm(item);
+    });
+  });
+  listEl.querySelectorAll('[data-item-library-remove]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await deleteItemLibraryItem(btn.getAttribute('data-item-library-remove'));
+    });
+  });
+}
+
+/** Shows the inline form for Add (null) or Edit (a stored record). */
+async function showItemLibraryForm(item = null) {
+  const formEl = document.getElementById('item-library-form');
+  if (!formEl) return;
+  itemLibraryEditing = item && typeof item === 'object' ? item : null;
+
+  const headingEl = document.getElementById('item-library-form-heading');
+  const idEl = document.getElementById('item-library-id');
+  const descEl = document.getElementById('item-library-description');
+  const hsnEl = document.getElementById('item-library-hsn');
+  const rateEl = document.getElementById('item-library-rate');
+  const taxEl = document.getElementById('item-library-tax');
+  const currencyEl = document.getElementById('item-library-currency');
+  const scopeEl = document.getElementById('item-library-scope');
+  const deleteBtn = document.getElementById('item-library-delete');
+
+  const editing = itemLibraryEditing;
+  const scope = normalizeCatalogScope(editing
+    ? editing.scope
+    : (itemLibraryConfig ? itemLibraryConfig.scope : 'global'));
+  const companyId = editing
+    ? editing.companyId
+    : (scope === 'company' ? catalogActiveCompanyId() : '');
+
+  if (headingEl) headingEl.textContent = editing ? 'Edit library item' : 'Add library item';
+  if (idEl) idEl.value = editing ? editing.id : '';
+  if (descEl) descEl.value = editing && editing.description ? editing.description : '';
+  if (hsnEl) hsnEl.value = editing && editing.hsn ? editing.hsn : '';
+  if (rateEl) rateEl.value = editing ? String(Number(editing.rate) || 0) : '0';
+  if (taxEl) taxEl.value = editing ? String(Number(editing.taxRate) || 0) : '18';
+  if (currencyEl) currencyEl.value = editing
+    ? (editing.currency || '')
+    : (currentInvoice.meta.currency || '$');
+  if (scopeEl) scopeEl.value = scope;
+  if (deleteBtn) deleteBtn.hidden = !editing;
+
+  await populateItemLibraryCompanySelect(companyId);
+  formEl.hidden = false;
+  setItemLibraryStatus('');
+  if (descEl) descEl.focus();
+}
+
+function hideItemLibraryForm() {
+  const formEl = document.getElementById('item-library-form');
+  if (formEl) formEl.hidden = true;
+  ['item-library-id', 'item-library-description', 'item-library-hsn',
+    'item-library-rate', 'item-library-tax', 'item-library-currency'
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const scopeEl = document.getElementById('item-library-scope');
+  if (scopeEl) scopeEl.value = 'global';
+  const companyEl = document.getElementById('item-library-company');
+  if (companyEl) { companyEl.value = ''; companyEl.disabled = false; }
+  const hintEl = document.getElementById('item-library-company-hint');
+  if (hintEl) hintEl.textContent = '';
+  itemLibraryEditing = null;
+}
+
+/** Validates, normalizes and persists the inline form; never mutates invoices. */
+async function saveItemLibraryForm() {
+  const idEl = document.getElementById('item-library-id');
+  const descEl = document.getElementById('item-library-description');
+  const hsnEl = document.getElementById('item-library-hsn');
+  const rateEl = document.getElementById('item-library-rate');
+  const taxEl = document.getElementById('item-library-tax');
+  const currencyEl = document.getElementById('item-library-currency');
+  const scopeEl = document.getElementById('item-library-scope');
+  const companyEl = document.getElementById('item-library-company');
+  if (!descEl || !scopeEl) return;
+
+  const description = descEl.value.trim();
+  if (!description) {
+    alert('A description is required for the library item.');
+    descEl.focus();
+    return;
+  }
+  const scope = normalizeCatalogScope(scopeEl.value);
+  const companyId = (scope === 'company' && companyEl) ? String(companyEl.value || '').trim() : '';
+  if (scope === 'company' && !companyId) {
+    alert('Choose a company for this item, or switch the scope to Shared.');
+    if (companyEl) companyEl.focus();
+    return;
+  }
+
+  const formId = (idEl && idEl.value) ? String(idEl.value).trim() : '';
+  // When editing the same stored record, its counters/createdAt survive the
+  // update; saveCatalogItem/normalizeCatalogItem re-stamp the rest.
+  const baseline = itemLibraryEditing && formId && itemLibraryEditing.id === formId
+    ? itemLibraryEditing
+    : null;
+
+  // A blank currency must never reach normalizeCatalogItem (empty currencyKey
+  // would make the item unreachable in the currency-filtered picker): fall
+  // back to the editing baseline's currency, then the document's currency.
+  const docCurrency = (currentInvoice.meta.currency && String(currentInvoice.meta.currency).trim())
+    ? String(currentInvoice.meta.currency).trim()
+    : '$';
+  let formCurrency = currencyEl ? String(currencyEl.value || '').trim() : '';
+  if (!formCurrency) {
+    formCurrency = (baseline && baseline.currency && String(baseline.currency).trim())
+      ? String(baseline.currency).trim()
+      : docCurrency;
+    if (currencyEl) currencyEl.value = formCurrency;
+  }
+
+  const record = Object.assign({}, baseline || {}, {
+    id: formId || undefined,
+    description,
+    hsn: hsnEl ? hsnEl.value.trim() : '',
+    rate: rateEl ? rateEl.value : 0,
+    taxRate: taxEl ? taxEl.value : 18,
+    currency: formCurrency,
+    scope,
+    companyId: scope === 'company' ? companyId : null
+  });
+
+  try {
+    const savedRecord = await saveCatalogItem(record);
+    upsertCatalogItemInCache(savedRecord);
+    updateCatalogSettingsCount();
+    // Manager edits change what matches each line item's description/scope:
+    // rebuild the bookmark states and the picker rows alongside the list.
+    renderLineItemsEditor();
+    hideItemLibraryForm();
+    await renderItemLibraryList();
+    refreshCatalogPicker();
+    const scopeLabel = savedRecord.scope === 'company'
+      ? (catalogCompanyLabel(savedRecord.companyId) || 'Company')
+      : 'Global items';
+    setItemLibraryStatus(baseline ? `Updated ${savedRecord.description}` : `Saved to ${scopeLabel}`);
+  } catch (e) {
+    console.warn('Could not save the library item:', e);
+    alert('Could not save this library item. ' + (e && e.message ? e.message : ''));
+  }
+}
+
+/** Confirm-delete from the manager; documents keep their line items. */
+async function deleteItemLibraryItem(id) {
+  if (!id) return;
+  const item = catalogItems.find(c => c && c.id === id);
+  if (!item) return;
+  const label = item.description || 'this item';
+  if (!confirm(`Delete "${label}" from the item library? Saved documents keep their line items.`)) return;
+  try {
+    await deleteCatalogItem(id);
+    catalogItems = catalogItems.filter(c => c && c.id !== id);
+    updateCatalogSettingsCount();
+    if (itemLibraryEditing && itemLibraryEditing.id === id) hideItemLibraryForm();
+    // Lines that matched the deleted item go back to the unsaved bookmark.
+    renderLineItemsEditor();
+    await renderItemLibraryList();
+    refreshCatalogPicker();
+    setItemLibraryStatus(`Deleted ${label}`);
+  } catch (e) {
+    console.warn('Could not delete the library item:', e);
+    alert('Could not delete this library item. ' + (e && e.message ? e.message : ''));
+  }
+}
+
+/** One-time modal wiring: search, toolbar, form buttons and scope radios. */
+function setupItemLibraryModal() {
+  const searchEl = document.getElementById('item-library-search');
+  if (searchEl) searchEl.addEventListener('input', () => { renderItemLibraryList(); });
+
+  const addBtn = document.getElementById('item-library-add');
+  if (addBtn) addBtn.addEventListener('click', () => { showItemLibraryForm(null); });
+
+  const saveBtn = document.getElementById('item-library-save');
+  if (saveBtn) saveBtn.addEventListener('click', () => { saveItemLibraryForm(); });
+
+  const cancelBtn = document.getElementById('item-library-cancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => { hideItemLibraryForm(); });
+
+  const deleteBtn = document.getElementById('item-library-delete');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      if (itemLibraryEditing && itemLibraryEditing.id) {
+        await deleteItemLibraryItem(itemLibraryEditing.id);
+      }
+    });
+  }
+
+  // Form scope select only toggles the company field enablement.
+  const formScopeSelect = document.getElementById('item-library-scope');
+  if (formScopeSelect) {
+    formScopeSelect.addEventListener('change', () => {
+      const companyEl = document.getElementById('item-library-company');
+      // >1 option means real company options exist (the empty-library state
+      // renders a single placeholder option and keeps Global usable).
+      const hasCompanies = Boolean(companyEl) && companyEl.options.length > 1;
+      updateCatalogFormCompanyState(hasCompanies);
+    });
+  }
+
+  // Radios set the default save scope for new items (persisted immediately).
+  document.querySelectorAll('input[name="item-library-scope"]').forEach(radio => {
+    radio.addEventListener('change', async () => {
+      if (!radio.checked) return;
+      const scope = normalizeCatalogScope(radio.value);
+      try {
+        itemLibraryConfig = await saveItemLibraryConfig({ scope });
+      } catch (e) {
+        console.warn('Could not persist the item library scope:', e);
+        itemLibraryConfig.scope = scope;
+      }
+      renderItemLibraryScopeRadios();
+      // Saved-state badges depend on the configured scope: rebuild them.
+      renderLineItemsEditor();
+      updateCatalogScopeHint();
+      refreshCatalogPicker();
+    });
   });
 }
 
@@ -1556,7 +2633,7 @@ function renderTaxesEditor() {
     const ratioVal = clampNum(tax.ratio !== undefined ? tax.ratio : tax.rate, 0, 100, 50);
     return `
       <div class="tax-row" data-index="${index}" style="display:grid; grid-template-columns: 1fr 100px 32px; gap:8px; align-items:center; margin-bottom:8px;">
-        <input type="text" class="form-input tax-name-input" value="${escapeHtml(tax.name)}" placeholder="Tax Leg (e.g. CGST, SGST, VAT)">
+        <input type="text" class="form-input tax-name-input" value="${appEscapeHtml(tax.name)}" placeholder="Tax Leg (e.g. CGST, SGST, VAT)">
         <div style="display:flex; align-items:center; gap:4px;">
           <input type="number" class="form-input tax-ratio-input" value="${ratioVal}" min="0" max="100" step="any" placeholder="Share %" style="text-align:right; padding:6px 8px;">
           <span style="font-size:12px; font-weight:600; color:#64748b;">%</span>
@@ -1628,7 +2705,7 @@ function updateSenderTaxHint() {
     const formatted = formatTaxId(taxIdVal);
     hintBox.innerHTML = `
       <div style="font-size:10.5px; color:#0369a1; display:flex; align-items:center; justify-content:space-between; gap:6px;">
-        <span>Registered: <strong>${escapeHtml(formatted)}</strong></span>
+        <span>Registered: <strong>${appEscapeHtml(formatted)}</strong></span>
         ${!hasTaxOnItems ? `
           <button type="button" class="btn btn-secondary btn-sm" id="btn-quick-standard-tax" style="padding:1px 6px; font-size:10.5px;">
             Apply 18% GST
@@ -1662,13 +2739,13 @@ function updateSheetView() {
   const currency = currentInvoice.meta.currency || '$';
   const numberFormat = currentInvoice.meta.numberFormat || 'international';
   const docType = currentInvoice.meta.docType || 'invoice';
-  const cfg = DOC_TYPES[docType] || DOC_TYPES.invoice;
+  const cfg = APP_DOC_TYPES[docType] || APP_DOC_TYPES.invoice;
 
   // 1. Update Sheet Metadata & Dynamic Labels
   document.getElementById('sheet-inv-title').textContent = currentInvoice.meta.title || cfg.title;
   const numLabel = document.getElementById('sheet-num-label');
   if (numLabel) numLabel.textContent = cfg.numLabel;
-  document.getElementById('sheet-inv-num').textContent = currentInvoice.meta.number || (cfg.prefix + '001');
+  document.getElementById('sheet-inv-num').textContent = currentInvoice.meta.number || '';
   
   const dateLabel = document.getElementById('sheet-date-label');
   if (dateLabel) dateLabel.textContent = 'Date:';
@@ -1763,46 +2840,36 @@ function updateSheetView() {
   if (subtotalLabel) subtotalLabel.textContent = cfg.subtotalLabel;
   if (totalLabel) totalLabel.textContent = cfg.totalLabel;
 
-  // 3. Line Items Calculations & Table Rendering
-  let subtotal = 0;
-  let totalTaxSum = 0;
-  const rateBreakdown = {};
+  // 3. Line Items Calculations & Table Rendering (one shared calculation)
+  const totals = calculateTotals(currentInvoice);
+  const subtotal = totals.subtotal;
+  const totalTaxSum = totals.taxTotal;
+  const rateBreakdown = totals.rateBreakdown || [];
 
   const tbody = document.getElementById('sheet-items-tbody');
-  tbody.innerHTML = currentInvoice.items.map(item => {
-    const qty = clampNum(item.qty, 0, 1000000, 0);
-    const rate = clampNum(item.rate, 0, 1000000000, 0);
-    const discountPct = clampNum(item.discount, 0, 100, 0);
-    const taxableLine = qty * rate * (1 - discountPct / 100);
-    const rawTaxRate = (item.taxRate !== undefined && item.taxRate !== null) ? parseFloat(item.taxRate) : 18;
-    const taxRate = isFinite(rawTaxRate) ? Math.min(100, Math.max(0, rawTaxRate)) : 0;
-    const itemTax = taxableLine * (taxRate / 100);
-
-    subtotal += taxableLine;
-    totalTaxSum += itemTax;
-
-    if (!rateBreakdown[taxRate]) {
-      rateBreakdown[taxRate] = { taxable: 0, tax: 0 };
-    }
-    rateBreakdown[taxRate].taxable += taxableLine;
-    rateBreakdown[taxRate].tax += itemTax;
+  tbody.innerHTML = (totals.lines || []).map(line => {
+    const qty = line.qty;
+    const rate = line.rate;
+    const discountPct = line.discount;
+    const taxableLine = line.taxable;
+    const taxRate = line.taxRate;
 
     const isUnregistered = !currentInvoice.sender.taxId || !currentInvoice.sender.taxId.trim();
     const discDisplay = discountPct > 0 ? `${discountPct}%` : '—';
-    const taxDisplay = taxRate > 0 
-      ? `<span class="item-tax-badge">${taxRate}%</span>` 
-      : (isUnregistered 
-          ? `<span style="color:#94a3b8;">—</span>` 
+    const taxDisplay = taxRate > 0
+      ? `<span class="item-tax-badge">${taxRate}%</span>`
+      : (isUnregistered
+          ? `<span style="color:#94a3b8;">—</span>`
           : `<span class="item-tax-badge" style="background:#f1f5f9; color:#94a3b8;">0% Exempt</span>`);
 
-    const hsnMarkup = item.hsn && item.hsn.trim() 
-      ? `<div class="item-hsn-tag">HSN/SAC: ${escapeHtml(item.hsn.trim())}</div>` 
+    const hsnMarkup = line.hsn && line.hsn.trim()
+      ? `<div class="item-hsn-tag">HSN/SAC: ${appEscapeHtml(line.hsn.trim())}</div>`
       : '';
 
     return `
       <tr>
         <td>
-          <div class="item-desc-bold">${escapeHtml(item.description || 'Item Description')}</div>
+          <div class="item-desc-bold">${appEscapeHtml(line.description || 'Item Description')}</div>
           ${hsnMarkup}
         </td>
         <td class="text-center">${qty}</td>
@@ -1832,32 +2899,25 @@ function updateSheetView() {
       taxesListContainer.innerHTML = '';
     }
   } else {
-    const rawSum = activeTaxLegs.reduce((sum, t) => sum + (parseFloat(t.ratio) || 0), 0);
-    const sumOfRatios = rawSum > 0 ? rawSum : 100;
-    // If user zeroed all legs but tax exists, show a single consolidated Tax row
-    // so the breakdown never displays $0 legs while the total still includes tax.
-    const effectiveLegs = rawSum > 0 ? activeTaxLegs : [{ name: 'Tax', ratio: 100 }];
-
-    const renderedTaxLegs = effectiveLegs.map(leg => {
+    const renderedTaxLegs = (totals.taxLegs || []).map(leg => {
       const legRatio = clampNum(leg.ratio, 0, 100, 0);
-      const legShareFrac = sumOfRatios > 0 ? (legRatio / sumOfRatios) : 0;
-      const legTaxAmount = totalTaxSum * legShareFrac;
-
       return `
         <div class="totals-row tax-leg">
-          <span>${escapeHtml(leg.name || 'Tax')} <span class="tax-tag">${legRatio}% split</span></span>
-          <span>${formatMoney(legTaxAmount, currency, numberFormat)}</span>
+          <span>${appEscapeHtml(leg.name || 'Tax')} <span class="tax-tag">${legRatio}% split</span></span>
+          <span>${formatMoney(leg.amount, currency, numberFormat)}</span>
         </div>
       `;
     });
 
     // Multi-rate summary banner if there are multiple rates
-    const distinctRates = Object.keys(rateBreakdown).map(Number).sort((a,b) => b - a);
+    const distinctRates = rateBreakdown
+      .map(entry => Number(entry.rate))
+      .sort((a, b) => b - a);
     let multiRateSummaryHtml = '';
     if (distinctRates.length > 1) {
-      const breakdownText = distinctRates.map(r => {
-        const data = rateBreakdown[r];
-        return `${r}% on ${formatMoney(data.taxable, currency, numberFormat)}: ${formatMoney(data.tax, currency, numberFormat)}`;
+      const breakdownText = distinctRates.map(rate => {
+        const data = rateBreakdown.find(entry => Number(entry.rate) === rate) || { taxable: 0, tax: 0 };
+        return `${rate}% on ${formatMoney(data.taxable, currency, numberFormat)}: ${formatMoney(data.tax, currency, numberFormat)}`;
       }).join(' • ');
       multiRateSummaryHtml = `
         <div style="font-size:10.5px; color:#64748b; padding:4px 0; border-bottom:1px dashed #e2e8f0; margin-bottom:4px; text-align:right;">
@@ -1870,7 +2930,7 @@ function updateSheetView() {
   }
 
   // 5. Total Due
-  const grandTotal = subtotal + totalTaxSum;
+  const grandTotal = totals.total;
   document.getElementById('sheet-total-val').textContent = formatMoney(grandTotal, currency, numberFormat);
 
   // Optional Amount in Words Block
@@ -1987,8 +3047,8 @@ function updateLogoDisplay() {
     // If no logo, show company text header
     container.innerHTML = `
       <div>
-        <div class="sheet-company-title">${escapeHtml(currentInvoice.sender.name || 'Company Name')}</div>
-        <div class="sheet-company-meta">${escapeHtml(currentInvoice.sender.address || '')}</div>
+        <div class="sheet-company-title">${appEscapeHtml(currentInvoice.sender.name || 'Company Name')}</div>
+        <div class="sheet-company-meta">${appEscapeHtml(currentInvoice.sender.address || '')}</div>
       </div>
     `;
     thumb.innerHTML = `<span style="font-size:11px; color:#94a3b8;">No Logo</span>`;
@@ -2531,7 +3591,7 @@ function attachFormListeners() {
   if (btnConvert) {
     btnConvert.addEventListener('click', async (e) => {
       e.preventDefault();
-      const curDoc = (DOC_TYPES[currentInvoice.meta.docType] || DOC_TYPES.quotation).name;
+      const curDoc = (APP_DOC_TYPES[currentInvoice.meta.docType] || APP_DOC_TYPES.quotation).name;
       if (confirm(`Convert this ${curDoc} into a finalized Invoice? All line items, rates, taxes, and client details will be preserved.`)) {
         await convertToInvoice();
       }
@@ -2550,8 +3610,20 @@ function attachFormListeners() {
 
   // Invoice Metadata Fields
   bindTextInput('input-inv-title', val => currentInvoice.meta.title = val);
-  bindTextInput('input-inv-number', val => currentInvoice.meta.number = val);
-  bindTextInput('input-inv-date', val => currentInvoice.meta.date = val);
+  bindTextInput('input-inv-number', val => {
+    currentInvoice.meta.number = val;
+    // A hand-edited number is owned by the user: the engine never regenerates
+    // or advances it (it is still uniqueness-checked at save).
+    currentInvoice.meta.numberAuto = false;
+  });
+  bindTextInput('input-inv-date', val => {
+    currentInvoice.meta.date = val;
+    // An engine-issued draft number follows the issue date ({FY}/{YYYY}/{MM}
+    // tokens and period keys). Persisted records and hand-edited numbers never
+    // move (H1). A rolled config is passed so the regenerated number uses the
+    // current period's counter, never a stale one.
+    refreshAutoNumberForDraft(rolloverNumberingConfig(currentNumberingConfig));
+  });
   bindTextInput('input-inv-due', val => currentInvoice.meta.dueDate = val);
   bindTextInput('input-inv-po', val => currentInvoice.meta.po = val);
 
@@ -2584,6 +3656,8 @@ function attachFormListeners() {
       }
       updateSheetView();
       renderLineItemsEditor();
+      // The saved-item picker is currency-aware: re-filter its groups.
+      refreshCatalogPicker();
       triggerAutoSave();
     });
   }
@@ -2594,6 +3668,7 @@ function attachFormListeners() {
       currentInvoice.meta.currency = val || 'CUR';
       updateSheetView();
       renderLineItemsEditor();
+      refreshCatalogPicker();
       triggerAutoSave();
     });
   }
@@ -2622,15 +3697,28 @@ function attachFormListeners() {
   // Sender Fields
   bindTextInput('input-sender-name', val => {
     currentInvoice.sender.name = val;
+    // Hand-editing the sender detaches the stored company link so Reports
+    // never attribute a manually rebranded document to the old company.
+    detachCompanyLink();
     // Keep Studio wordmark in sync
     const monoWordmark = document.getElementById('monogram-wordmark');
     if (monoWordmark && !monoWordmark.value) monoWordmark.value = val;
   });
-  bindTextInput('input-sender-email', val => currentInvoice.sender.email = val);
-  bindTextInput('input-sender-phone', val => currentInvoice.sender.phone = val);
-  bindTextInput('input-sender-address', val => currentInvoice.sender.address = val);
+  bindTextInput('input-sender-email', val => {
+    currentInvoice.sender.email = val;
+    detachCompanyLink();
+  });
+  bindTextInput('input-sender-phone', val => {
+    currentInvoice.sender.phone = val;
+    detachCompanyLink();
+  });
+  bindTextInput('input-sender-address', val => {
+    currentInvoice.sender.address = val;
+    detachCompanyLink();
+  });
   bindTextInput('input-sender-taxid', val => {
     currentInvoice.sender.taxId = val;
+    detachCompanyLink();
     updateSenderTaxHint();
   });
 
@@ -2661,7 +3749,12 @@ function attachFormListeners() {
   }
 
   // Client Fields
-  bindTextInput('input-client-name', val => currentInvoice.client.name = val);
+  bindTextInput('input-client-name', val => {
+    currentInvoice.client.name = val;
+    // A hand-edited name is no longer guaranteed to match the directory record.
+    currentInvoice.clientId = null;
+    if (currentInvoice.client) delete currentInvoice.client.id;
+  });
   bindTextInput('input-client-email', val => currentInvoice.client.email = val);
   bindTextInput('input-client-phone', val => currentInvoice.client.phone = val);
   bindTextInput('input-client-address', val => currentInvoice.client.address = val);
@@ -2744,6 +3837,9 @@ function attachFormListeners() {
         selectCompany.value = activeCompanyProfileId || '';
         return;
       }
+      // Empty value is the display-only "No company linked" state, never an
+      // action; and an unknown id must not silently apply a company.
+      if (!val) return;
       const comp = await getCompany(val);
       if (comp) {
         applyCompanyToInvoice(comp);
@@ -2758,6 +3854,11 @@ function attachFormListeners() {
       const select = document.getElementById('select-company-profile');
       const compId = select && select.value && select.value !== '__new__' ? select.value : activeCompanyProfileId;
       if (!compId) {
+        // New companies inherit the current document's currency/format and
+        // only claim the default slot when no default exists, so the app
+        // never ends up with multiple defaults (M7).
+        const companies = await getAllCompanies();
+        const hasDefault = companies.some(c => c.isDefault);
         const newComp = {
           id: generateId('comp_'),
           name: currentInvoice.sender.name || 'My Company',
@@ -2766,12 +3867,20 @@ function attachFormListeners() {
           address: currentInvoice.sender.address || '',
           taxId: currentInvoice.sender.taxId || '',
           payment: currentInvoice.payment || '',
-          isDefault: true
+          defaultCurrency: currentInvoice.meta.currency || '$',
+          defaultNumberFormat: currentInvoice.meta.numberFormat || 'international',
+          isDefault: !hasDefault
         };
         await saveCompany(newComp);
+        if (newComp.isDefault) {
+          await setDefaultCompany(newComp.id);
+        }
         activeCompanyProfileId = newComp.id;
+        currentInvoice.companyId = newComp.id;
         await renderCompanyProfilesSelector();
         await updateSavedCompaniesCount();
+        await notifyDataChanged();
+        refreshCatalogPicker();
         alert(`Company profile "${newComp.name}" saved!`);
       } else {
         const existing = await getCompany(compId);
@@ -2784,6 +3893,9 @@ function attachFormListeners() {
           existing.payment = currentInvoice.payment || '';
           await saveCompany(existing);
           await renderCompanyProfilesSelector();
+          await notifyDataChanged();
+          // Renames must reach the scope hint and company scope tags.
+          refreshCatalogPicker();
           alert(`Company profile "${existing.name}" updated with current details!`);
         }
       }
@@ -2828,6 +3940,8 @@ function attachFormListeners() {
       document.getElementById('modal-company-address').value = 'Kerala, India\nhttps://utharam.in/\nSimple Solutions for Complex Problems';
       document.getElementById('modal-company-taxid').value = 'KL-UTH-01';
       document.getElementById('modal-company-payment').value = 'Direct Wire / Bank Remittance on Request\nAccount: Utharam Research & Software Studio';
+      document.getElementById('modal-company-currency').value = '₹';
+      document.getElementById('modal-company-number-format').value = 'indian';
       document.getElementById('modal-company-is-default').checked = true;
       document.getElementById('company-form-heading').textContent = 'Add Utharam Official Profile Preset';
     });
@@ -2844,22 +3958,28 @@ function attachFormListeners() {
   // Save Sender Profile Default
   document.getElementById('btn-save-sender-profile').addEventListener('click', async () => {
     const select = document.getElementById('select-company-profile');
-    const compId = select && select.value && select.value !== '__new__' ? select.value : generateId('comp_');
-    const comp = {
-      id: compId,
+    const compId = select && select.value && select.value !== '__new__' ? select.value : null;
+    const existing = compId ? await getCompany(compId) : null;
+    const comp = Object.assign({}, existing || {}, {
+      id: compId || generateId('comp_'),
       name: currentInvoice.sender.name || 'Apex Studio',
       email: currentInvoice.sender.email || '',
       phone: currentInvoice.sender.phone || '',
       address: currentInvoice.sender.address || '',
       taxId: currentInvoice.sender.taxId || '',
       payment: currentInvoice.payment || '',
+      defaultCurrency: existing && existing.defaultCurrency ? existing.defaultCurrency : (currentInvoice.meta.currency || '$'),
+      defaultNumberFormat: existing && existing.defaultNumberFormat ? existing.defaultNumberFormat : (currentInvoice.meta.numberFormat || 'international'),
       isDefault: true
-    };
+    });
+    if (!comp.createdAt) comp.createdAt = Date.now();
     await saveCompany(comp);
     await setDefaultCompany(comp.id);
     activeCompanyProfileId = comp.id;
+    currentInvoice.companyId = comp.id;
     await renderCompanyProfilesSelector();
     await updateSavedCompaniesCount();
+    await notifyDataChanged();
     alert(`"${comp.name}" saved as default company! All new documents will start with this profile.`);
   });
 
@@ -2870,7 +3990,12 @@ function attachFormListeners() {
       alert('Please enter a client name first.');
       return;
     }
-    await saveClient(Object.assign({}, currentInvoice.client));
+    const savedClient = await saveClient(Object.assign({}, currentInvoice.client, {
+      id: currentInvoice.client.id || currentInvoice.clientId || undefined
+    }));
+    currentInvoice.clientId = savedClient.id;
+    currentInvoice.client.id = savedClient.id;
+    await notifyDataChanged();
     alert(`Client "${currentInvoice.client.name}" saved to Client Directory!`);
   });
 }
@@ -2952,9 +4077,9 @@ function bindTextInput(elemId, callback) {
 // ============================================================================
 // 10. NAVIGATION, SIDEBAR COLLAPSE, MODALS & BACKUP
 // ============================================================================
-async function resetToFreshDocument(prefillClient = null) {
-  const curType = currentInvoice.meta.docType || 'invoice';
-  const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
+async function resetToFreshDocument(prefillClient = null, requestedType = null) {
+  const curType = requestedType && APP_DOC_TYPES[requestedType] ? requestedType : activeDocType();
+  const cfg = APP_DOC_TYPES[curType] || APP_DOC_TYPES.invoice;
   let defCompany = null;
   try {
     defCompany = await getDefaultCompany();
@@ -2963,19 +4088,31 @@ async function resetToFreshDocument(prefillClient = null) {
   }
   currentInvoice = JSON.parse(JSON.stringify(DEFAULT_INVOICE_STATE));
   currentInvoice.id = (curType === 'invoice' ? 'inv_' : 'doc_') + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-  currentInvoice.meta.date = new Date().toISOString().split('T')[0];
-  currentInvoice.meta.dueDate = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+  currentInvoice.meta.date = appLocalDateString();
+  currentInvoice.meta.dueDate = addDaysLocal(currentInvoice.meta.date, 14);
   currentInvoice.meta.docType = curType;
   currentInvoice.meta.title = cfg.title;
+  currentInvoice.meta.currency = (defCompany && defCompany.defaultCurrency) || '$';
+  currentInvoice.meta.numberFormat = (defCompany && defCompany.defaultNumberFormat) ||
+    (currentInvoice.meta.currency === '₹' ? 'indian' : 'international');
   if (currentNumberingConfig && currentNumberingConfig.mode === 'auto') {
-    await syncNumberingPeriod(currentNumberingConfig);
-    currentInvoice.meta.number = generateDocumentNumber(curType, currentInvoice.meta.date, currentNumberingConfig, currentNumberingConfig.counter);
+    currentInvoice.meta.number = generateForType(curType, currentInvoice.meta.date, currentNumberingConfig);
+    currentInvoice.meta.numberAuto = true;
   } else {
-    currentInvoice.meta.number = cfg.prefix + new Date().getFullYear() + '-' + Math.floor(100 + Math.random() * 900);
+    // Manual mode never invents a number; the user types it.
+    currentInvoice.meta.number = '';
+    currentInvoice.meta.numberAuto = false;
   }
   currentInvoice.meta.status = cfg.defaultStatus;
   currentInvoice.meta.showSignature = (curType !== 'invoice');
   currentInvoice.notes = cfg.defaultNotes;
+  delete currentInvoice.convertedToId;
+  delete currentInvoice.convertedToNumber;
+  delete currentInvoice.convertedAt;
+  delete currentInvoice.sourceDocId;
+  delete currentInvoice.sourceDocNumber;
+  delete currentInvoice.duplicatedFromId;
+
   if (defCompany) {
     currentInvoice.sender = {
       name: defCompany.name || '',
@@ -2986,8 +4123,10 @@ async function resetToFreshDocument(prefillClient = null) {
     };
     currentInvoice.payment = defCompany.payment || '';
     activeCompanyProfileId = defCompany.id;
+    currentInvoice.companyId = defCompany.id;
   } else {
     currentInvoice.payment = '';
+    currentInvoice.companyId = null;
   }
 
   if (prefillClient) {
@@ -2998,14 +4137,393 @@ async function resetToFreshDocument(prefillClient = null) {
       address: prefillClient.address || '',
       taxId: prefillClient.taxId || ''
     };
+    currentInvoice.clientId = prefillClient.id || null;
+  } else {
+    currentInvoice.clientId = null;
   }
 
+  currentDocumentPersisted = false;
+  documentEdited = false;
   try { await renderCompanyProfilesSelector(); } catch (e) { console.warn(e); }
   populateFormFields();
   renderLineItemsEditor();
   renderTaxesEditor();
   updateSheetView();
+  refreshCatalogPicker();
   triggerAutoSave();
+  navigateTo('compose');
+  requestAnimationFrame(() => updateDocumentPaginationLive());
+  syncComposeTitle();
+}
+
+/**
+ * Keeps the browser tab title in sync with the document being edited.
+ * navigateTo('compose') is a same-view no-op, so document changes must update
+ * the title directly (UI9).
+ */
+function syncComposeTitle() {
+  if (getCurrentView() !== 'compose') return;
+  document.title = `${docTypeName(activeDocType())} ${currentInvoice.meta.number || ''} - InvoiceCraft`
+    .replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Single hook for "persisted data changed" events (UI3): refresh shell counts
+ * plus whichever data-bearing view is currently visible. Never called during
+ * initial boot.
+ */
+async function notifyDataChanged() {
+  try { await refreshShellCounts(); } catch (e) { console.warn('Shell count refresh failed:', e); }
+  const view = getCurrentView();
+  if (view === 'reports' && reportsMounted) {
+    try { await refreshReportsView(); } catch (e) { console.warn('Reports refresh failed:', e); }
+  }
+  if (view === 'home') {
+    try { await renderHome(); } catch (e) { console.warn('Home refresh failed:', e); }
+  }
+}
+
+/**
+ * Regenerates the engine-issued number of an unsaved draft (H1). Used when the
+ * issue date (or type/scheme inputs behind the number) change and again at
+ * save time. Persisted records and hand-edited numbers are never rewritten.
+ * The optional `config` lets callers pass an already-rolled numbering config;
+ * whatever comes in is rolled here too (a no-op when already rolled), so a
+ * period boundary can never regenerate a number from a stale counter.
+ * Returns true when the number was rewritten.
+ */
+function refreshAutoNumberForDraft(config = currentNumberingConfig) {
+  if (currentDocumentPersisted) return false;
+  const effective = rolloverNumberingConfig(config || currentNumberingConfig);
+  if (!effective || effective.mode !== 'auto') return false;
+  if (!currentInvoice.meta.numberAuto) return false;
+  const next = generateForType(activeDocType(), currentInvoice.meta.date, effective);
+  if (!next || next === currentInvoice.meta.number) return false;
+  currentInvoice.meta.number = next;
+  const numInput = document.getElementById('input-inv-number');
+  if (numInput) numInput.value = next;
+  updateNumberingBadgeUI(effective);
+  return true;
+}
+
+/**
+ * Saves the active document and its numbering config in one transaction.
+ * In auto mode the document's own type counter advances exactly once per newly
+ * issued number; saving the same document again does not consume another.
+ * Rollover is applied before anything else, every save uniqueness-checks the
+ * number, and persisted records are never renumbered or re-advanced (H1–H4).
+ */
+async function persistCurrentDocument() {
+  const persistedBeforeAttempt = currentDocumentPersisted;
+  let saveCompleted = false;
+  try {
+    const type = activeDocType();
+    const config = rolloverNumberingConfig(currentNumberingConfig);
+    const autoMode = config.mode === 'auto';
+
+    // Stale draft regeneration: re-issue the number from the current rolled
+    // config and the current issue date before anything is written. The rolled
+    // local config is passed explicitly so a period boundary can never
+    // regenerate from the pre-rollover counter.
+    if (autoMode && !currentDocumentPersisted && currentInvoice.meta.numberAuto) {
+      if (refreshAutoNumberForDraft(config)) {
+        updateSheetView();
+      }
+    }
+
+    const number = String(currentInvoice.meta.number || '').trim();
+    if (!number) {
+      alert('Please enter a document number before saving.');
+      return false;
+    }
+
+    // Auto mode always uniqueness-checks; hand-edited auto numbers and manual
+    // numbers get the same guard. Re-saves exclude their own record.
+    const conflict = await findNumberConflict(number, type, currentDocumentPersisted ? currentInvoice.id : null);
+    if (conflict) {
+      alert(`The ${docTypeName(type)} number "${number}" is already used by another saved document. Choose a unique number.`);
+      return false;
+    }
+
+    // Advance exactly once per newly issued number; never for re-saves and
+    // never for hand-edited numbers. A retyped number that exactly matches the
+    // engine's expected current number is still a consumption and must
+    // advance, or the next new document would collide with it.
+    const expectedCurrentForCurrentConfig = autoMode
+      ? generateForType(type, currentInvoice.meta.date, config)
+      : '';
+    let configToSave = config;
+    if (autoMode && !currentDocumentPersisted &&
+        (currentInvoice.meta.numberAuto ||
+         (expectedCurrentForCurrentConfig && number === expectedCurrentForCurrentConfig))) {
+      configToSave = advanceTypeCounter(config, type);
+    }
+
+    currentInvoice.meta.number = number;
+    if (!autoMode) currentInvoice.meta.numberAuto = false;
+
+    currentInvoice.companyId = activeCompanyProfileId || currentInvoice.companyId || null;
+    if (!currentInvoice.clientId && currentInvoice.client && currentInvoice.client.id) {
+      currentInvoice.clientId = currentInvoice.client.id;
+    }
+
+    await saveInvoiceAndNumbering(currentInvoice, configToSave);
+    saveCompleted = true;
+    currentNumberingConfig = normalizeNumberingConfig(configToSave);
+    currentDocumentPersisted = true;
+    documentEdited = false;
+    updateNumberingBadgeUI(currentNumberingConfig);
+    updateSheetView();
+    syncComposeTitle();
+    try { await saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited: false }); } catch (e) { console.warn(e); }
+    try { await updateSavedInvoicesCount(); } catch (e) {}
+    await notifyDataChanged();
+    return true;
+  } catch (err) {
+    console.error('Save failed:', err);
+    // A failed save must never leave the editor looking persisted: the prepare
+    // step may already have stamped updatedAt on the live object before the
+    // write failed. Demote the editor content back to an unsaved draft so a
+    // reload cannot infer it was persisted.
+    if (!persistedBeforeAttempt && !saveCompleted) {
+      currentDocumentPersisted = false;
+      delete currentInvoice.updatedAt;
+      documentEdited = true;
+      try {
+        await saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited: true });
+      } catch (e) { console.warn(e); }
+    }
+    alert('Could not save this document: ' + (err && err.message ? err.message : err));
+    return false;
+  }
+}
+
+async function openAppModal(id) {
+  if (!id) return;
+  if (id === 'modal-numbering-engine') {
+    populateNumberingModal(currentNumberingConfig);
+  } else if (id === 'modal-companies') {
+    await renderCompaniesModalList();
+  } else if (id === 'modal-clients') {
+    await renderClientsList();
+  } else if (id === 'modal-invoices') {
+    await renderSavedInvoicesList();
+  } else if (id === 'modal-item-library') {
+    await openItemLibraryManager();
+  }
+  openModal(id);
+}
+
+async function resumeActiveDraft() {
+  try {
+    const record = await getActiveDraftRecord();
+    if (record && record.data) {
+      const data = record.data;
+      // Verify the persisted record still exists instead of inferring from
+      // updatedAt; a leftover updatedAt on a deleted record must not make the
+      // editor treat the draft as a saved document.
+      let persisted = false;
+      if (data.updatedAt && data.id) {
+        try {
+          persisted = Boolean(await getInvoice(data.id));
+        } catch (e) {
+          console.warn('Could not verify the persisted draft record:', e);
+          persisted = false;
+        }
+      }
+      if (data.updatedAt && !persisted) delete data.updatedAt;
+      // edited === null is the legacy "edited" marker: treat it as edited.
+      await loadInvoiceIntoEditor(data, {
+        persisted,
+        activeCompanyProfileId: record.activeCompanyProfileId,
+        documentEdited: record.edited === null ? true : Boolean(record.edited)
+      });
+    }
+  } catch (e) {
+    console.warn('Could not restore the active draft:', e);
+  }
+  navigateTo('compose');
+  requestAnimationFrame(() => updateDocumentPaginationLive());
+  syncComposeTitle();
+}
+
+async function requestNewDocument(type = null, prefillClient = null) {
+  const targetType = type && APP_DOC_TYPES[type] ? type : activeDocType();
+  // Only real edits are worth a save/discard prompt. A pristine default
+  // document (or an untouched saved record) starts fresh with no prompt and
+  // never writes a demo record (UI1/UI5).
+  const hasUnsavedWork = documentEdited;
+  if (hasUnsavedWork) {
+    pendingNewDocType = targetType;
+    pendingPrefillClient = prefillClient;
+    const cfg = APP_DOC_TYPES[targetType] || APP_DOC_TYPES.invoice;
+    const curNum = currentInvoice.meta.number || 'Current Document';
+    const titleEl = document.getElementById('new-doc-cur-title');
+    if (titleEl) titleEl.textContent = `${docTypeName(activeDocType())} "${curNum}" → new ${cfg.name}`;
+    openModal('modal-confirm-new-doc');
+    return;
+  }
+  navigateTo('compose');
+  await resetToFreshDocument(prefillClient, targetType);
+}
+
+async function loadInvoiceIntoEditor(inv, opts = {}) {
+  if (!inv) return false;
+  normalizeInvoice(inv);
+  currentInvoice = JSON.parse(JSON.stringify(inv));
+  normalizeInvoice(currentInvoice);
+  activeCompanyProfileId = opts.activeCompanyProfileId || currentInvoice.companyId || null;
+  if (!activeCompanyProfileId && currentInvoice.sender && currentInvoice.sender.name) {
+    try {
+      const allComps = await getAllCompanies();
+      const match = allComps.find(c => c.name === currentInvoice.sender.name);
+      if (match) {
+        activeCompanyProfileId = match.id;
+        currentInvoice.companyId = currentInvoice.companyId || match.id;
+      }
+    } catch (e) {}
+  }
+  currentDocumentPersisted = opts.persisted !== undefined ? Boolean(opts.persisted) : Boolean(inv.updatedAt);
+  documentEdited = Boolean(opts.documentEdited);
+  try { await renderCompanyProfilesSelector(); } catch (e) {}
+  populateFormFields();
+  renderLineItemsEditor();
+  renderTaxesEditor();
+  updateSheetView();
+  refreshCatalogPicker();
+  try { await saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited }); } catch (e) { console.warn(e); }
+  return true;
+}
+
+async function openDocumentInEditor(id) {
+  try {
+    const inv = await getInvoice(id);
+    if (!inv) {
+      alert('That document could not be found. It may have been deleted.');
+      return false;
+    }
+    // Never silently replace an edited draft: resolve the dirty-draft prompt
+    // BEFORE the new document is loaded or written to activeDraft (UI1).
+    if (documentEdited &&
+        !confirm('You have unsaved changes in the current draft. Opening this document will discard them. Discard and continue?')) {
+      return false;
+    }
+    await loadInvoiceIntoEditor(inv, { persisted: true });
+    navigateTo('compose');
+    closeModal('modal-invoices');
+    closeModal('modal-clients');
+    closeModal('modal-reports');
+    requestAnimationFrame(() => updateDocumentPaginationLive());
+    try { await refreshShellCounts(); } catch (e) {}
+    syncComposeTitle();
+    return true;
+  } catch (e) {
+    console.error('Could not open document:', e);
+    alert('Could not open that document: ' + (e && e.message ? e.message : e));
+    return false;
+  }
+}
+
+async function duplicateDocument(source) {
+  if (!source) return false;
+  // Never silently replace an edited draft: resolve the dirty-draft prompt
+  // before a number is generated, consumed, or loaded (UI1).
+  if (documentEdited &&
+      !confirm('You have unsaved changes in the current draft. Duplicating will replace the editor content and discard them. Discard and continue?')) {
+    return false;
+  }
+  const type = source.meta?.docType || 'invoice';
+  let config = rolloverNumberingConfig(currentNumberingConfig);
+  let number;
+  if (config.mode === 'manual') {
+    number = await promptManualNumber(type, '', null);
+    if (!number) return false;
+  } else {
+    number = generateForType(type, appLocalDateString(), config);
+    if (await findNumberConflict(number, type, null)) {
+      alert(`The generated ${docTypeName(type)} number "${number}" is already in use. Duplicate cancelled.`);
+      return false;
+    }
+  }
+
+  const duplicate = buildDuplicateRecord({
+    source,
+    id: generateId('inv_'),
+    number,
+    now: new Date()
+  });
+  duplicate.meta.status = (APP_DOC_TYPES[type] || APP_DOC_TYPES.invoice).defaultStatus;
+  delete duplicate.convertedToId;
+  delete duplicate.convertedToNumber;
+  delete duplicate.convertedAt;
+  delete duplicate.sourceDocId;
+  delete duplicate.sourceDocNumber;
+  if (duplicate.meta) {
+    delete duplicate.meta.convertedToId;
+    delete duplicate.meta.convertedToNumber;
+    delete duplicate.meta.convertedAt;
+    delete duplicate.meta.sourceDocId;
+    delete duplicate.meta.sourceDocNumber;
+  }
+  // Link identity stays honest (M6): a legacy source without a stored company
+  // link produces a duplicate without an invented link. The sender snapshot is
+  // kept as-is so number/currency/link never disagree.
+  duplicate.companyId = source.companyId || null;
+  duplicate.clientId = source.clientId || null;
+  if (!duplicate.meta.currency) duplicate.meta.currency = source.meta?.currency || '$';
+  duplicate.meta.numberAuto = config.mode === 'auto';
+
+  if (config.mode === 'auto') {
+    config = advanceTypeCounter(config, type);
+  }
+  try {
+    await saveInvoiceAndNumbering(duplicate, config);
+  } catch (e) {
+    console.error('Duplicate save failed:', e);
+    alert('Could not save the duplicate: ' + (e && e.message ? e.message : e));
+    return false;
+  }
+  currentNumberingConfig = normalizeNumberingConfig(config);
+  await loadInvoiceIntoEditor(duplicate, { persisted: true });
+  closeModal('modal-invoices');
+  closeModal('modal-clients');
+  navigateTo('compose');
+  requestAnimationFrame(() => updateDocumentPaginationLive());
+  try { await updateSavedInvoicesCount(); } catch (e) {}
+  await notifyDataChanged();
+  syncComposeTitle();
+  return true;
+}
+
+// Compose-only print manager path. The shell routes Ctrl+P here only in Compose.
+function safePrintAction() {
+  if (getCurrentView() !== 'compose') return false;
+  const origTitle = document.title;
+  const prefix = docTypeName(activeDocType());
+  const rawNum = currentInvoice.meta.number || 'Draft';
+  const sanitizedNum = rawNum.replace(/[\\/:*?"<>|]/g, '_');
+
+  // Visual page break guides must never enter print output.
+  document.querySelectorAll('.canvas-page-break-line').forEach(el => el.remove());
+
+  if (safePrintAction._restore) {
+    try {
+      window.removeEventListener('afterprint', safePrintAction._restore);
+      clearTimeout(safePrintAction._t);
+    } catch (e) {}
+  }
+
+  document.title = `${prefix}-${sanitizedNum}`;
+  const restoreTitle = () => {
+    document.title = origTitle;
+    if (getCurrentView() === 'compose') updateDocumentPaginationLive();
+    safePrintAction._restore = null;
+  };
+  safePrintAction._restore = restoreTitle;
+  window.addEventListener('afterprint', restoreTitle, { once: true });
+  safePrintAction._t = setTimeout(restoreTitle, 1500);
+  window.print();
+  return true;
 }
 
 function attachNavigationListeners() {
@@ -3017,6 +4535,7 @@ function attachNavigationListeners() {
   const floatingToggleBtn = document.getElementById('btn-expand-sidebar-floating');
 
   const toggleSidebar = () => {
+    if (getCurrentView() !== 'compose') return;
     const isCollapsed = workspace.classList.toggle('sidebar-collapsed');
     if (floatingToggleBtn) {
       floatingToggleBtn.style.display = isCollapsed ? 'inline-flex' : 'none';
@@ -3024,129 +4543,54 @@ function attachNavigationListeners() {
     if (sidebarToggleBtn) {
       sidebarToggleBtn.classList.toggle('btn-primary', isCollapsed);
     }
+    requestAnimationFrame(() => updateDocumentPaginationLive());
   };
+  toggleSidebarPanel = toggleSidebar;
 
   if (sidebarToggleBtn) sidebarToggleBtn.addEventListener('click', toggleSidebar);
   if (floatingToggleBtn) floatingToggleBtn.addEventListener('click', toggleSidebar);
 
-  // Global Keyboard shortcuts: Ctrl+B (Sidebar), Ctrl+S (Save), Ctrl+P (Print)
-  window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
-      e.preventDefault();
-      toggleSidebar();
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      const saveBtn = document.getElementById('btn-save-invoice');
-      if (saveBtn) saveBtn.click();
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
-      e.preventDefault();
-      safePrintAction();
-    }
-  });
-
-  /**
- * Burns the current auto-number so the next document gets a fresh one.
- * Only advances when the document still carries the engine's current number,
- * so repeated saves of the same document never skip a sequence number and
- * hand-typed numbers are never overwritten.
- * Returns true when the counter advanced.
- */
-async function advanceNumberingCounter() {
-  if (!currentNumberingConfig || currentNumberingConfig.mode !== 'auto') return false;
-  await syncNumberingPeriod(currentNumberingConfig);
-
-  const expectedCurrent = generateDocumentNumber(
-    currentInvoice.meta.docType || 'invoice',
-    currentInvoice.meta.date,
-    currentNumberingConfig,
-    currentNumberingConfig.counter
-  );
-  if (currentInvoice.meta.number !== expectedCurrent) return false;
-
-  currentNumberingConfig.counter = (parseInt(currentNumberingConfig.counter, 10) || 1) + 1;
-  currentNumberingConfig.updatedAt = Date.now();
-  try {
-    await saveNumberingConfig(currentNumberingConfig);
-  } catch (e) {
-    console.warn('Could not persist advanced numbering counter:', e);
-  }
-  updateNumberingBadgeUI(currentNumberingConfig);
-  return true;
-}
-
-/**
- * Persists the active document and consumes its auto-generated number.
- * Shared by "Save" and "Save & Start Fresh" so both paths stay consistent.
- */
-async function persistCurrentDocument() {
-  await advanceNumberingCounter();
-  await saveInvoice(currentInvoice);
-  await updateSavedInvoicesCount();
-}
-
-// New Document Button (Opens Graceful Confirmation Dialog)
+  // New Document Button (existing confirmation dialog; target type is captured
+  // when the action starts, so Home's New Quote works too).
   const btnNewInvoice = document.getElementById('btn-new-invoice');
   if (btnNewInvoice) {
     btnNewInvoice.addEventListener('click', () => {
-      const curType = currentInvoice.meta.docType || 'invoice';
-      const cfg = DOC_TYPES[curType] || DOC_TYPES.invoice;
-      const curNum = currentInvoice.meta.number || 'Current Document';
-      const titleEl = document.getElementById('new-doc-cur-title');
-      if (titleEl) titleEl.textContent = `${cfg.name} "${curNum}"`;
-      openModal('modal-confirm-new-doc');
+      requestNewDocument(activeDocType());
     });
   }
 
   const btnNewSaveAndStart = document.getElementById('btn-new-save-and-start');
   if (btnNewSaveAndStart) {
     btnNewSaveAndStart.addEventListener('click', async () => {
-      await persistCurrentDocument();
+      const targetType = pendingNewDocType || activeDocType();
+      const targetClient = pendingPrefillClient;
+      const saved = await persistCurrentDocument();
+      if (!saved) return;
       closeModal('modal-confirm-new-doc');
-      await resetToFreshDocument();
+      pendingNewDocType = null;
+      pendingPrefillClient = null;
+      await resetToFreshDocument(targetClient, targetType);
     });
   }
 
   const btnNewDiscard = document.getElementById('btn-new-discard');
   if (btnNewDiscard) {
     btnNewDiscard.addEventListener('click', async () => {
+      const targetType = pendingNewDocType || activeDocType();
+      const targetClient = pendingPrefillClient;
       closeModal('modal-confirm-new-doc');
-      await resetToFreshDocument();
+      pendingNewDocType = null;
+      pendingPrefillClient = null;
+      await resetToFreshDocument(targetClient, targetType);
     });
   }
 
   // Save Document Button
   document.getElementById('btn-save-invoice').addEventListener('click', async () => {
-    await persistCurrentDocument();
-    const docTypeName = (DOC_TYPES[currentInvoice.meta.docType] || DOC_TYPES.invoice).name;
-    alert(`${docTypeName} "${currentInvoice.meta.number}" saved successfully to IndexedDB!`);
+    const saved = await persistCurrentDocument();
+    if (!saved) return;
+    alert(`${docTypeName(activeDocType())} "${currentInvoice.meta.number}" saved successfully to IndexedDB!`);
   });
-
-  // Print / Save as PDF Handler (100% Vector, Selectable Text, Zero Marks)
-  function safePrintAction() {
-    const origTitle = document.title;
-    const docType = currentInvoice.meta.docType || 'invoice';
-    const prefix = (DOC_TYPES[docType] ? DOC_TYPES[docType].name : 'Invoice');
-    const rawNum = currentInvoice.meta.number || 'Draft';
-    const sanitizedNum = rawNum.replace(/[\\/:*?"<>|]/g, '_');
-
-    // 1. Remove any on-screen visual page break lines so they NEVER enter print output
-    document.querySelectorAll('.canvas-page-break-line').forEach(el => el.remove());
-
-    // 2. Temporarily set document title to the clean document number
-    document.title = `${prefix}-${sanitizedNum}`;
-    const restoreTitle = () => {
-      document.title = origTitle;
-      updateDocumentPaginationLive();
-    };
-    if (!safePrintAction._afterPrintBound) {
-      window.addEventListener('afterprint', restoreTitle);
-      safePrintAction._afterPrintBound = true;
-    }
-    // Fallback timer in case afterprint is not fired (some browsers / cancelled dialogs)
-    clearTimeout(safePrintAction._t);
-    safePrintAction._t = setTimeout(restoreTitle, 1500);
-    window.print();
-  }
 
   // Bind Print / Save PDF Buttons
   const btnPrintNav = document.getElementById('btn-print-pdf');
@@ -3236,6 +4680,22 @@ async function persistCurrentDocument() {
     });
   }
 
+  // Guide contents links scroll the dialog body (the page itself does not
+  // scroll while a modal is open). Keeps the TOC useful in the editorial guide.
+  const guideToc = document.querySelector('#modal-user-guide .guide-toc');
+  if (guideToc) {
+    guideToc.addEventListener('click', (e) => {
+      const link = e.target.closest && e.target.closest('a[href^="#"]');
+      if (!link) return;
+      const target = document.querySelector(link.getAttribute('href'));
+      const body = document.querySelector('#modal-user-guide .guide-body');
+      if (!target || !body) return;
+      e.preventDefault();
+      const top = target.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 16;
+      body.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    });
+  }
+
   // Open Numbering Engine Modal Trigger
   const btnOpenNumberingModal = document.getElementById('btn-open-numbering-modal');
   if (btnOpenNumberingModal) {
@@ -3253,17 +4713,21 @@ async function persistCurrentDocument() {
         alert('Numbering is currently in Manual Mode. Click "Numbering Engine" to switch to Auto Continuous Sequence.');
         return;
       }
-      await syncNumberingPeriod(currentNumberingConfig);
-      const nextNum = generateDocumentNumber(
-        currentInvoice.meta.docType || 'invoice',
-        currentInvoice.meta.date,
-        currentNumberingConfig,
-        currentNumberingConfig.counter
-      );
+      // Saved documents are never renumbered (H1): rewriting a persisted
+      // record here would desync it from history and reports.
+      if (currentDocumentPersisted) {
+        alert('This document is already saved, so its number is frozen. Saved documents are never renumbered — use New or Duplicate for a fresh number.');
+        return;
+      }
+      currentNumberingConfig = rolloverNumberingConfig(currentNumberingConfig);
+      const nextNum = generateForType(activeDocType(), currentInvoice.meta.date, currentNumberingConfig);
       currentInvoice.meta.number = nextNum;
+      currentInvoice.meta.numberAuto = true;
       const numInput = document.getElementById('input-inv-number');
       if (numInput) numInput.value = nextNum;
       updateSheetView();
+      syncComposeTitle();
+      updateNumberingBadgeUI(currentNumberingConfig);
       triggerAutoSave();
     });
   }
@@ -3375,7 +4839,9 @@ function attachModalListeners() {
     });
   });
 
-  ['num-cfg-pattern', 'num-prefix-inv', 'num-prefix-qt', 'num-prefix-est', 'num-prefix-pi', 'num-cfg-counter'].forEach(id => {
+  ['num-cfg-pattern', 'num-prefix-inv', 'num-prefix-qt', 'num-prefix-est', 'num-prefix-pi',
+    'num-cfg-counter-invoice', 'num-cfg-counter-quotation', 'num-cfg-counter-estimate', 'num-cfg-counter-proforma'
+  ].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updateNumberingModalPreviewLive);
   });
@@ -3388,41 +4854,37 @@ function attachModalListeners() {
   const btnSaveNumModal = document.getElementById('btn-save-numbering-modal');
   if (btnSaveNumModal) {
     btnSaveNumModal.addEventListener('click', async () => {
-      const mode = document.querySelector('input[name="num-mode"]:checked')?.value || 'auto';
-      const counterVal = parseInt(document.getElementById('num-cfg-counter')?.value, 10) || 1;
-      currentNumberingConfig.mode = mode;
-      currentNumberingConfig.scheme = document.getElementById('num-cfg-pattern')?.value || '{PREFIX}/{FY}/{COUNTER}';
-      currentNumberingConfig.prefixInvoice = document.getElementById('num-prefix-inv')?.value || 'INV';
-      currentNumberingConfig.prefixQuotation = document.getElementById('num-prefix-qt')?.value || 'QT';
-      currentNumberingConfig.prefixEstimate = document.getElementById('num-prefix-est')?.value || 'EST';
-      currentNumberingConfig.prefixProforma = document.getElementById('num-prefix-pi')?.value || 'PI';
-      currentNumberingConfig.counter = counterVal;
-      currentNumberingConfig.startingCounter = counterVal;
-      currentNumberingConfig.padding = parseInt(document.getElementById('num-cfg-padding')?.value, 10) || 4;
-      currentNumberingConfig.resetPeriod = document.getElementById('num-cfg-reset')?.value || 'financial_year';
-      currentNumberingConfig.updatedAt = Date.now();
-      // Stamp the current period explicitly: the counter value the user just typed
-      // is authoritative, so bind it to this period rather than letting a rollover
-      // reset it away on the next document.
-      currentNumberingConfig.lastPeriodKey = resolvePeriodKey(new Date(), currentNumberingConfig.resetPeriod);
-
+      const nextConfig = readNumberingModalConfig();
+      // An auto scheme without {COUNTER} cannot produce unique numbers.
+      if (nextConfig.mode === 'auto' && !String(nextConfig.scheme || '').includes('{COUNTER}')) {
+        alert('Auto-numbering schemes must contain the {COUNTER} token so every number is unique. Add {COUNTER} to the pattern and save again.');
+        return;
+      }
+      // The scheme must also carry enough period information for the reset
+      // policy, or counters collide after every rollover.
+      if (nextConfig.mode === 'auto') {
+        const periodError = validateNumberingSchemePeriod(nextConfig.scheme, nextConfig.resetPeriod);
+        if (periodError) {
+          alert(periodError);
+          return;
+        }
+      }
+      currentNumberingConfig = nextConfig;
       await saveNumberingConfig(currentNumberingConfig);
       updateNumberingBadgeUI(currentNumberingConfig);
 
-      if (mode === 'auto') {
-        const newNum = generateDocumentNumber(
-          currentInvoice.meta.docType || 'invoice',
-          currentInvoice.meta.date,
-          currentNumberingConfig,
-          currentNumberingConfig.counter
-        );
+      // Saved records are never renumbered by a config change (H1). Only an
+      // unsaved draft picks up the freshly previewed number.
+      if (currentNumberingConfig.mode === 'auto' && !currentDocumentPersisted) {
+        const newNum = generateForType(activeDocType(), currentInvoice.meta.date, currentNumberingConfig);
         currentInvoice.meta.number = newNum;
+        currentInvoice.meta.numberAuto = true;
         const numInput = document.getElementById('input-inv-number');
         if (numInput) numInput.value = newNum;
-        updateSheetView();
-        triggerAutoSave();
       }
-
+      updateSheetView();
+      syncComposeTitle();
+      triggerAutoSave();
       closeModal('modal-numbering-engine');
     });
   }
@@ -3467,14 +4929,18 @@ function attachModalListeners() {
       reader.onload = async (evt) => {
         try {
           const parsed = JSON.parse(evt.target.result);
-          if (!parsed || typeof parsed !== 'object' || (!Array.isArray(parsed.invoices) && !Array.isArray(parsed.clients) && !Array.isArray(parsed.companies) && !parsed.numberingConfig && !parsed.profile)) {
-            throw new Error('Unrecognized backup shape (expected invoices/clients/companies/numberingConfig).');
+          if (!parsed || typeof parsed !== 'object' ||
+              (!Array.isArray(parsed.invoices) && !Array.isArray(parsed.clients) && !Array.isArray(parsed.companies) &&
+               !parsed.numberingConfig && !parsed.profile &&
+               !Array.isArray(parsed.catalogItems) && !parsed.itemLibraryConfig && !parsed.activeDraft)) {
+            throw new Error('Unrecognized backup shape (expected invoices/clients/companies/catalogItems/catalog scope/numberingConfig/active draft).');
           }
           if (!confirm('Restore this backup? Existing records with the same IDs will be overwritten.')) {
             return;
           }
           await importAllData(parsed);
           await updateSavedInvoicesCount();
+          await notifyDataChanged();
           alert('Database restored successfully! Reloading...');
           window.location.reload();
         } catch (err) {
@@ -3563,7 +5029,7 @@ async function renderSavedInvoicesList() {
     const sortedClients = Object.keys(clientCounts).sort((a,b) => a.localeCompare(b));
     let optionsHtml = `<option value="all">All Clients (${invoices.length})</option>`;
     sortedClients.forEach(cName => {
-      optionsHtml += `<option value="${escapeHtml(cName)}">${escapeHtml(cName)} (${clientCounts[cName]})</option>`;
+      optionsHtml += `<option value="${appEscapeHtml(cName)}">${appEscapeHtml(cName)} (${clientCounts[cName]})</option>`;
     });
     clientFilterSelect.innerHTML = optionsHtml;
     if (sortedClients.includes(prevSelected) || prevSelected === 'all') {
@@ -3642,23 +5108,31 @@ async function renderSavedInvoicesList() {
     const dateFormatted = inv.updatedAt ? new Date(inv.updatedAt).toLocaleDateString() : '—';
     const docType = inv.meta?.docType || 'invoice';
     const docBadge = docType !== 'invoice'
-      ? `<span style="display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px; background:#e0f2fe; color:#0369a1; text-transform:uppercase; margin-left:6px;">${escapeHtml(docType)}</span>`
+      ? `<span style="display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px; background:#e0f2fe; color:#0369a1; text-transform:uppercase; margin-left:6px;">${appEscapeHtml(docType)}</span>`
       : '';
-    const safeInvId = escapeHtml(inv.id);
-    const invTotal = calculateTotal(inv);
-    const invTotalText = isFinite(invTotal) ? invTotal.toFixed(2) : '0.00';
+    const safeInvId = appEscapeHtml(inv.id);
+    // Frozen totals win; legacy records fall back to the shared calculator.
+    const frozenInvTotal = (inv.total === undefined || inv.total === null) ? NaN : Number(inv.total);
+    const invTotal = Number.isFinite(frozenInvTotal) ? frozenInvTotal : calculateTotal(inv);
+    const invTotalText = formatMoney(invTotal, inv.meta?.currency || '$', inv.meta?.numberFormat || 'international');
+    const conversionRemark = inv.convertedToNumber
+      ? `<div style="font-size:11px; color:#0369a1; margin-top:3px;">Converted to ${appEscapeHtml(inv.convertedToNumber)}${inv.convertedAt ? ' on ' + appEscapeHtml(new Date(inv.convertedAt).toLocaleDateString()) : ''}</div>`
+      : (inv.sourceDocNumber
+        ? `<div style="font-size:11px; color:#7c3aed; margin-top:3px;">From ${appEscapeHtml(inv.sourceDocNumber)}</div>`
+        : '');
     return `
       <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
         <div>
           <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
-            ${escapeHtml(inv.meta?.number || 'Document')}
+            ${appEscapeHtml(inv.meta?.number || 'Document')}
             ${docBadge}
             <span style="color:#94a3b8; font-weight:400; margin:0 4px;">&bull;</span>
-            ${escapeHtml(inv.client?.name || 'Client')}
+            ${appEscapeHtml(inv.client?.name || 'Client')}
           </div>
           <div style="font-size:11.5px; color:#64748b; margin-top:2px;">
-            Updated: ${escapeHtml(dateFormatted)} &bull; ${escapeHtml(inv.meta?.currency || '$')}${escapeHtml(invTotalText)}
+            Updated: ${appEscapeHtml(dateFormatted)} &bull; ${appEscapeHtml(invTotalText)}
           </div>
+          ${conversionRemark}
         </div>
         <div style="display:flex; gap:6px;">
           <button class="btn btn-primary btn-sm btn-load-inv" data-id="${safeInvId}">Load</button>
@@ -3673,52 +5147,39 @@ async function renderSavedInvoicesList() {
 
   container.querySelectorAll('.btn-load-inv').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const inv = await getInvoice(btn.dataset.id);
-      if (inv) {
-        normalizeInvoice(inv);
-        currentInvoice = JSON.parse(JSON.stringify(inv));
-        if (inv.sender && inv.sender.name) {
-          try {
-            const allComps = await getAllCompanies();
-            const match = allComps.find(c => c.name === inv.sender.name);
-            if (match) activeCompanyProfileId = match.id;
-          } catch (e) {}
-        }
-        populateFormFields();
-        renderLineItemsEditor();
-        renderTaxesEditor();
-        updateSheetView();
-        triggerAutoSave();
-        closeModal('modal-invoices');
-      }
+      await openDocumentInEditor(btn.dataset.id);
     });
   });
 
   container.querySelectorAll('.btn-dup-inv').forEach(btn => {
     btn.addEventListener('click', async () => {
       const inv = await getInvoice(btn.dataset.id);
-      if (inv) {
-        normalizeInvoice(inv);
-        currentInvoice = JSON.parse(JSON.stringify(inv));
-        currentInvoice.id = generateId('inv_');
-        currentInvoice.meta.number += '-COPY';
-        populateFormFields();
-        renderLineItemsEditor();
-        renderTaxesEditor();
-        updateSheetView();
-        await saveInvoice(currentInvoice);
-        await updateSavedInvoicesCount();
-        await renderSavedInvoicesList();
-      }
+      if (!inv) return;
+      normalizeInvoice(inv);
+      await duplicateDocument(inv);
+      try { await renderSavedInvoicesList(); } catch (e) {}
     });
   });
 
   container.querySelectorAll('.btn-del-inv').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (confirm('Permanently delete this invoice?')) {
+      if (confirm('Permanently delete this document? Conversion numbers already written into other records are kept as history text.')) {
         await deleteInvoice(btn.dataset.id);
+        // If the deleted record is the one open in the editor, demote the
+        // editor content to an unsaved draft: Home must never present it as a
+        // saved record and type switching must work again (UI6).
+        if (currentDocumentPersisted && btn.dataset.id === currentInvoice.id) {
+          currentDocumentPersisted = false;
+          delete currentInvoice.updatedAt;
+          documentEdited = true;
+          try {
+            await saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited: true });
+          } catch (e) { console.warn(e); }
+          updateNumberingBadgeUI(currentNumberingConfig);
+        }
         await updateSavedInvoicesCount();
         await renderSavedInvoicesList();
+        await notifyDataChanged();
       }
     });
   });
@@ -3743,34 +5204,73 @@ async function renderClientsList() {
     const cNameClean = (c.name || '').trim().toLowerCase();
     const clientDocs = allInvoices.filter(inv => {
       const invCName = (inv.client?.name || '').trim().toLowerCase();
-      return (invCName && invCName === cNameClean) || (inv.client?.id === c.id);
+      // Durable-link match: saved documents keep the client link at top level
+      // (clientId), while older/snapshot shapes may carry it on client.id.
+      // Check both — guarded against records with no id — so a client rename
+      // never orphans its linked documents.
+      const idMatch = Boolean(c.id) && ((inv.client?.id === c.id) || (inv.clientId === c.id));
+      return (invCName && invCName === cNameClean) || idMatch;
     });
 
-    const totalBilled = clientDocs.reduce((sum, inv) => sum + calculateTotal(inv), 0);
-    const currSym = clientDocs[0]?.meta?.currency || currentInvoice.meta?.currency || '$';
-    const totalBilledText = formatMoney(totalBilled, currSym);
+    // Client totals are revenue-style (M2/M3): saved invoices only — quotes,
+    // estimates, proformas, and draft-status documents are pipeline, not
+    // revenue — grouped by canonical currency so mixed-currency histories are
+    // never summed into one meaningless number.
+    const invoiceDocs = clientDocs.filter(inv => {
+      const docType = inv.meta?.docType || 'invoice';
+      if (docType !== 'invoice') return false;
+      return (inv.meta?.status || inv.status || 'pending') !== 'draft';
+    });
+    const totalsByCurrency = new Map();
+    invoiceDocs.forEach(inv => {
+      const currency = inv.meta?.currency || '$';
+      const canonical = normalizeCurrency(currency);
+      const key = canonical.key || String(currency).trim().toUpperCase();
+      const frozen = (inv.total === undefined || inv.total === null) ? NaN : Number(inv.total);
+      const value = Number.isFinite(frozen) ? frozen : calculateTotal(inv);
+      const entry = totalsByCurrency.get(key) || {
+        currency,
+        numberFormat: inv.meta?.numberFormat || 'international',
+        total: 0
+      };
+      entry.total += value;
+      totalsByCurrency.set(key, entry);
+    });
+    const totalBilledText = Array.from(totalsByCurrency.values())
+      .map(entry => formatMoney(entry.total, entry.currency, entry.numberFormat))
+      .join(' • ');
 
     const docCountLabel = clientDocs.length === 0
       ? `<span style="font-size:11px; color:#94a3b8;">No documents yet</span>`
-      : `<span style="font-size:11px; font-weight:600; color:#0369a1; background:#e0f2fe; padding:2px 8px; border-radius:10px;">${clientDocs.length} doc${clientDocs.length > 1 ? 's' : ''} &bull; Total: ${totalBilledText}</span>`;
+      : `<span style="font-size:11px; font-weight:600; color:#0369a1; background:#e0f2fe; padding:2px 8px; border-radius:10px;">${clientDocs.length} doc${clientDocs.length > 1 ? 's' : ''}${totalBilledText ? ` &bull; Invoiced Total: ${appEscapeHtml(totalBilledText)}` : ''}</span>`;
 
     const docsDrawerHtml = clientDocs.length > 0 ? `
-      <div class="client-docs-drawer" id="client-drawer-${escapeHtml(c.id)}" style="display:none;">
+      <div class="client-docs-drawer" id="client-drawer-${appEscapeHtml(c.id)}" style="display:none;">
         <div style="font-size:11px; font-weight:700; color:#475569; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.4px;">
-          Previous Documents for ${escapeHtml(c.name)}:
+          Previous Documents for ${appEscapeHtml(c.name)}:
         </div>
         ${clientDocs.map(doc => {
           const docType = doc.meta?.docType || 'invoice';
-          const docTotal = formatMoney(calculateTotal(doc), doc.meta?.currency || '$');
+          // History rows show the frozen total when present, else the shared
+          // calculator, always formatted per the document's own currency and
+          // number format (M3/L2).
+          const frozenDocTotal = (doc.total === undefined || doc.total === null) ? NaN : Number(doc.total);
+          const docTotal = formatMoney(
+            Number.isFinite(frozenDocTotal) ? frozenDocTotal : calculateTotal(doc),
+            doc.meta?.currency || '$',
+            doc.meta?.numberFormat || 'international'
+          );
           const docDate = doc.updatedAt ? new Date(doc.updatedAt).toLocaleDateString() : '';
           return `
             <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:4px;">
               <div>
-                <span style="font-size:12px; font-weight:700; color:#0f172a;">${escapeHtml(doc.meta?.number || 'Doc')}</span>
-                <span style="font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px; background:#e0f2fe; color:#0369a1; text-transform:uppercase; margin-left:4px;">${escapeHtml(docType)}</span>
+                <span style="font-size:12px; font-weight:700; color:#0f172a;">${appEscapeHtml(doc.meta?.number || 'Doc')}</span>
+                <span style="font-size:9.5px; font-weight:700; padding:1px 5px; border-radius:3px; background:#e0f2fe; color:#0369a1; text-transform:uppercase; margin-left:4px;">${appEscapeHtml(docType)}</span>
                 <span style="font-size:11px; color:#64748b; margin-left:6px;">${docDate} &bull; ${docTotal}</span>
+                ${doc.convertedToNumber ? `<div style="font-size:10.5px; color:#0369a1; margin-top:2px;">Converted to ${appEscapeHtml(doc.convertedToNumber)}</div>` : ''}
+                ${doc.sourceDocNumber ? `<div style="font-size:10.5px; color:#7c3aed; margin-top:2px;">From ${appEscapeHtml(doc.sourceDocNumber)}</div>` : ''}
               </div>
-              <button class="btn btn-primary btn-xs btn-load-client-subdoc" data-doc-id="${escapeHtml(doc.id)}">Load</button>
+              <button class="btn btn-primary btn-xs btn-load-client-subdoc" data-doc-id="${appEscapeHtml(doc.id)}">Load</button>
             </div>
           `;
         }).join('')}
@@ -3782,18 +5282,18 @@ async function renderClientsList() {
         <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
           <div>
             <div style="font-size:13.5px; font-weight:700; color:#0f172a; display:flex; align-items:center; gap:8px;">
-              ${escapeHtml(c.name)}
+              ${appEscapeHtml(c.name)}
               ${docCountLabel}
             </div>
             <div style="font-size:11.5px; color:#64748b; margin-top:3px;">
-              ${escapeHtml(c.email || 'No email')} ${c.phone ? ' &bull; ' + escapeHtml(c.phone) : ''} ${c.taxId ? ' &bull; Tax: ' + escapeHtml(c.taxId) : ''}
+              ${appEscapeHtml(c.email || 'No email')} ${c.phone ? ' &bull; ' + appEscapeHtml(c.phone) : ''} ${c.taxId ? ' &bull; Tax: ' + appEscapeHtml(c.taxId) : ''}
             </div>
           </div>
           <div style="display:flex; gap:6px; align-items:center;">
-            ${clientDocs.length > 0 ? `<button class="btn btn-secondary btn-sm btn-toggle-client-history" data-client-id="${escapeHtml(c.id)}">History (${clientDocs.length})</button>` : ''}
-            <button class="btn btn-primary btn-sm btn-select-client" data-id="${escapeHtml(c.id)}" title="Fill this client into current document">Use Client</button>
-            <button class="btn btn-secondary btn-sm btn-new-for-client" data-id="${escapeHtml(c.id)}" title="Start fresh document for this client">+ New Doc</button>
-            <button class="btn btn-danger btn-sm btn-icon btn-del-client" data-id="${escapeHtml(c.id)}" title="Delete client">
+            ${clientDocs.length > 0 ? `<button class="btn btn-secondary btn-sm btn-toggle-client-history" data-client-id="${appEscapeHtml(c.id)}">History (${clientDocs.length})</button>` : ''}
+            <button class="btn btn-primary btn-sm btn-select-client" data-id="${appEscapeHtml(c.id)}" title="Fill this client into current document">Use Client</button>
+            <button class="btn btn-secondary btn-sm btn-new-for-client" data-id="${appEscapeHtml(c.id)}" title="Start fresh document for this client">+ New Doc</button>
+            <button class="btn btn-danger btn-sm btn-icon btn-del-client" data-id="${appEscapeHtml(c.id)}" title="Delete client">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             </button>
           </div>
@@ -3818,24 +5318,7 @@ async function renderClientsList() {
   // Bind loading a sub-document from client history
   container.querySelectorAll('.btn-load-client-subdoc').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const inv = await getInvoice(btn.dataset.docId);
-      if (inv) {
-        normalizeInvoice(inv);
-        currentInvoice = JSON.parse(JSON.stringify(inv));
-        if (inv.sender && inv.sender.name) {
-          try {
-            const allComps = await getAllCompanies();
-            const match = allComps.find(comp => comp.name === inv.sender.name);
-            if (match) activeCompanyProfileId = match.id;
-          } catch (e) {}
-        }
-        populateFormFields();
-        renderLineItemsEditor();
-        renderTaxesEditor();
-        updateSheetView();
-        triggerAutoSave();
-        closeModal('modal-clients');
-      }
+      await openDocumentInEditor(btn.dataset.docId);
     });
   });
 
@@ -3845,16 +5328,19 @@ async function renderClientsList() {
       const match = clients.find(c => c.id === btn.dataset.id);
       if (match) {
         currentInvoice.client = {
+          id: match.id,
           name: match.name,
           email: match.email || '',
           phone: match.phone || '',
           address: match.address || '',
           taxId: match.taxId || ''
         };
+        currentInvoice.clientId = match.id;
         populateFormFields();
         updateSheetView();
         triggerAutoSave();
         closeModal('modal-clients');
+        navigateTo('compose');
       }
     });
   });
@@ -3865,7 +5351,7 @@ async function renderClientsList() {
       const match = clients.find(c => c.id === btn.dataset.id);
       if (match) {
         closeModal('modal-clients');
-        await resetToFreshDocument(match);
+        await requestNewDocument(activeDocType(), match);
       }
     });
   });
@@ -3876,26 +5362,10 @@ async function renderClientsList() {
       if (confirm('Permanently delete this client from your address book?')) {
         await deleteClient(btn.dataset.id);
         await renderClientsList();
+        await notifyDataChanged();
       }
     });
   });
-}
-
-function calculateTotal(inv) {
-  let sub = 0;
-  let totalTax = 0;
-  (inv.items || []).forEach(item => {
-    const q = clampNum(item.qty, 0, 1000000, 0);
-    const r = clampNum(item.rate, 0, 1000000000, 0);
-    const d = clampNum(item.discount, 0, 100, 0);
-    const taxable = q * r * (1 - d / 100);
-    const rawRate = (item.taxRate !== undefined && item.taxRate !== null) ? parseFloat(item.taxRate) : 18;
-    const taxRate = isFinite(rawRate) ? Math.min(100, Math.max(0, rawRate)) : 0;
-    sub += taxable;
-    totalTax += taxable * (taxRate / 100);
-  });
-  const total = sub + totalTax;
-  return isFinite(total) ? total : 0;
 }
 
 // ============================================================================
@@ -3943,17 +5413,22 @@ function attachZoomListeners() {
 // 13. AUTO-SAVE DEBOUNCER
 // ============================================================================
 function triggerAutoSave() {
+  documentEdited = true;
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(async () => {
     try {
-      await saveActiveDraft(currentInvoice);
+      autosaveInFlight = saveActiveDraft(currentInvoice, { activeCompanyProfileId, documentEdited });
+      await autosaveInFlight;
     } catch (e) {
       console.warn('Auto-save error:', e);
+    } finally {
+      autosaveInFlight = null;
+      autoSaveTimer = null;
     }
   }, 600);
 }
 
-function escapeHtml(str) {
+function appEscapeHtml(str) {
   if (!str) return '';
   return String(str)
     .replace(/&/g, '&amp;')
@@ -4031,13 +5506,6 @@ function syncDocTypeCardA11y(docType) {
   } catch (e) {}
 }
 
-// Central numeric sanitizer: clamps parsed numbers into [min, max], falls back on NaN.
-function clampNum(value, min, max, fallback = 0) {
-  const n = parseFloat(value);
-  if (!isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
 function generateId(prefix) {
   try {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -4094,6 +5562,12 @@ function updateDocumentPaginationLive() {
   const textEl = document.getElementById('canvas-page-text');
   if (!sheet || !badge || !textEl) return;
 
+  // Measuring a hidden sheet returns 0 and would corrupt the page badge.
+  // It is recomputed when the Compose route becomes visible.
+  if (document.body.dataset.view && document.body.dataset.view !== 'compose') return;
+  if (getCurrentView() !== 'compose') return;
+  if (!sheet.offsetParent) return;
+
   requestAnimationFrame(() => {
     // 297mm standard A4 height in pixels at standard 96 DPI: 297 * 96 / 25.4 = 1122.52px
     const a4PageHeightPx = 1122;
@@ -4144,7 +5618,9 @@ function renderVisualPageBreakGuides(sheet, totalPages, pageHeightPx) {
 }
 
 window.addEventListener('resize', () => {
-  updateDocumentPaginationLive();
+  if (document.body.dataset.view === 'compose' && getCurrentView() === 'compose') {
+    updateDocumentPaginationLive();
+  }
 });
 
 
